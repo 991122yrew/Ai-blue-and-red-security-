@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>RedBlue Sentinel — Live API Console</title>
+<style>
+  :root{--base:#0A0D14;--panel:#111623;--raised:#171E2E;--line:#222B3F;--ink:#E6EAF2;--dim:#8B95A9;--red:#FF3B4E;--blue:#2F8CFF;--ok:#22C55E;--warn:#F5A524}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--base);color:var(--ink);font:14px/1.5 Inter,system-ui,-apple-system,"Segoe UI",sans-serif}
+  a{color:var(--blue)}
+  header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  h1{margin:0;font-size:17px} h1 span{background:linear-gradient(100deg,#FF3B4E,#7C5CFF,#2F8CFF);-webkit-background-clip:text;background-clip:text;color:transparent}
+  main{max-width:1100px;margin:0 auto;padding:20px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:16px}
+  .card h2{margin:0 0 10px;font-size:14px}
+  label{display:block;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--dim);margin:10px 0 4px}
+  input{width:100%;background:var(--base);border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:9px 11px;font:inherit}
+  button{background:var(--raised);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:7px 12px;font:inherit;cursor:pointer}
+  button:hover{border-color:var(--blue)} button.primary{background:linear-gradient(100deg,#FF3B4E,#2F8CFF);border:0;font-weight:600}
+  button:disabled{opacity:.5;cursor:default}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px}
+  .tabs button[aria-selected=true]{border-color:var(--blue);color:var(--blue)}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--dim);font-weight:500}
+  .mono{font-family:"JetBrains Mono",ui-monospace,Consolas,monospace;font-size:11.5px}
+  .chip{display:inline-block;padding:1px 8px;border-radius:99px;border:1px solid var(--line);font-size:11px}
+  .BLOCKED,.ok{color:var(--ok);border-color:var(--ok)} .FLAGGED,.warn{color:var(--warn);border-color:var(--warn)} .MISSED,.bad{color:var(--red);border-color:var(--red)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+  .stat{background:var(--raised);border-radius:10px;padding:10px 12px} .stat b{display:block;font-size:22px}
+  .dim{color:var(--dim)} .err{color:var(--red);min-height:20px}
+  .scroll{overflow-x:auto}
+  @media(max-width:600px){main{padding:12px}}
+</style>
+</head>
+<body>
+<header>
+  <h1><span>RedBlue Sentinel</span> · Live API Console</h1>
+  <div class="row"><a href="/">Demo site</a><span id="who" class="dim"></span><button id="logout" hidden>Sign out</button></div>
+</header>
+<main>
+  <section id="login" class="card" style="max-width:420px;margin:40px auto">
+    <h2>Sign in to the real backend</h2>
+    <p class="dim" style="margin:0 0 6px">Talks to the Python API at <span class="mono" id="apibase"></span>. Passwords are verified server-side.</p>
+    <form id="form">
+      <label for="email">Email</label><input id="email" type="email" autocomplete="username" required />
+      <label for="pw">Password</label><input id="pw" type="password" autocomplete="current-password" required />
+      <p class="err" id="loginErr" role="alert"></p>
+      <div class="row"><button class="primary" type="submit">Sign in</button>
+        <button type="button" data-who="red">Red</button><button type="button" data-who="blue">Blue</button><button type="button" data-who="admin">Admin</button></div>
+      <p class="dim" style="font-size:12px">The role buttons only fill the email; the demo password is in the README.</p>
+    </form>
+  </section>
+  <section id="app" hidden>
+    <div class="tabs" id="tabs" role="tablist"></div>
+    <div id="view"></div>
+  </section>
+</main>
+<script>
+(function () {
+  var API = (new URLSearchParams(location.search).get('api') || '').replace(/\/$/, '');
+  var token = null, me = null, tab = null;
+  document.getElementById('apibase').textContent = API || location.origin;
+
+  function el(tag, attrs, kids) {
+    var n = document.createElement(tag);
+    Object.keys(attrs || {}).forEach(function (k) { if (k === 'class') n.className = attrs[k]; else n.setAttribute(k, attrs[k]); });
+    [].concat(kids == null ? [] : kids).forEach(function (c) { n.appendChild(typeof c === 'string' ? document.createTextNode(c) : c); });
+    return n;
+  }
+  function chip(text) { return el('span', { class: 'chip ' + text }, text); }
+  function table(cols, rows) {
+    return el('div', { class: 'scroll' }, el('table', {}, [
+      el('thead', {}, el('tr', {}, cols.map(function (c) { return el('th', {}, c); }))),
+      el('tbody', {}, rows)
+    ]));
+  }
+  async function api(method, path, body) {
+    var res = await fetch(API + path, {
+      method: method,
+      headers: Object.assign({ 'Content-Type': 'application/json' }, token ? { Authorization: 'Bearer ' + token } : {}),
+      body: body ? JSON.stringify(body) : undefined
+    });
+    var data = await res.json().catch(function () { return {}; });
+    if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+    return data;
+  }
+
+  var VIEWS = {
+    run: { roles: ['red', 'admin'], label: 'Run tests', render: async function (box) {
+      var tests = (await api('GET', '/api/tests')).items, out = el('div', {});
+      box.appendChild(el('div', { class: 'card' }, [el('h2', {}, 'Adversarial test library'),
+        table(['ID', 'Category', 'Prompt', ''], tests.map(function (t) {
+          var b = el('button', {}, 'Run');
+          b.onclick = async function () {
+            b.disabled = true; out.textContent = '';
+            try {
+              var r = await api('POST', '/api/runs', { test_id: t.id });
+              out.appendChild(el('div', { class: 'card' }, [
+                el('h2', {}, [t.id + ' → ', chip(r.decision), ' risk ' + r.risk_score + ' (' + r.risk_label + ') · ' + r.latency_ms + ' ms · ' + r.session_id]),
+                el('ol', {}, r.reasoning.map(function (s) { return el('li', {}, [el('b', {}, s.title + ': '), s.outcome]); })),
+                el('p', { class: 'dim mono' }, r.response_preview)]));
+            } catch (e) { out.appendChild(el('p', { class: 'err' }, e.message)); }
+            b.disabled = false;
+          };
+          return el('tr', {}, [el('td', { class: 'mono' }, t.id), el('td', {}, t.category), el('td', {}, t.prompt_text), el('td', {}, b)]);
+        }))]));
+      box.appendChild(out);
+    } },
+    dash: { roles: ['red', 'blue', 'admin'], label: 'Dashboard', render: async function (box) {
+      var m = await api('GET', '/api/metrics'), runs = (await api('GET', '/api/runs')).items;
+      var stats = [['Attacks', m.total], ['Blocked', m.blocked], ['Flagged', m.flagged], ['Missed', m.missed], ['Detection rate', m.detection_rate + '%'], ['Avg latency', m.avg_latency_ms + ' ms']];
+      if (m.open_alerts !== undefined) stats.push(['Open alerts', m.open_alerts], ['Audit entries', m.audit_entries]);
+      box.appendChild(el('div', { class: 'grid' }, stats.map(function (s) { return el('div', { class: 'stat' }, [el('span', { class: 'dim' }, s[0]), el('b', {}, String(s[1]))]); })));
+      box.appendChild(el('div', { class: 'card', style: 'margin-top:16px' }, [el('h2', {}, me.role === 'red' ? 'Your runs' : 'All runs'),
+        table(['Run', 'Actor', 'Test', 'Decision', 'Risk', 'Time'], runs.map(function (r) {
+          return el('tr', {}, [el('td', { class: 'mono' }, r.id), el('td', {}, r.actor), el('td', { class: 'mono' }, r.test_id), el('td', {}, chip(r.decision)), el('td', {}, r.risk_label + ' (' + r.risk_score + ')'), el('td', { class: 'mono' }, r.ts_utc)]);
+        }))]));
+    } },
+    rules: { roles: ['blue', 'admin'], label: 'Defense rules', render: async function (box) {
+      var rules = (await api('GET', '/api/rules')).items;
+      box.appendChild(el('div', { class: 'card' }, [el('h2', {}, 'Private defense rules'),
+        table(['ID', 'Name', 'Type', 'Pattern', 'Action', 'Enabled'], rules.map(function (r) {
+          var b = el('button', {}, r.enabled ? 'Disable' : 'Enable');
+          b.onclick = async function () { await api('PATCH', '/api/rules/' + r.id, { enabled: !r.enabled }); show('rules'); };
+          return el('tr', {}, [el('td', { class: 'mono' }, r.id), el('td', {}, r.name), el('td', {}, r.pattern_type), el('td', { class: 'mono' }, r.pattern), el('td', {}, r.action), el('td', {}, b)]);
+        }))]));
+    } },
+    audit: { roles: ['blue', 'admin'], label: 'Audit log', render: async function (box) {
+      var page = await api('GET', '/api/audit?limit=100'), status = el('span', { class: 'dim' }, 'not verified');
+      var v = el('button', {}, 'Verify hash chain');
+      v.onclick = async function () {
+        var r = await api('GET', '/api/audit/verify');
+        status.className = 'chip ' + (r.valid ? 'ok' : 'bad');
+        status.textContent = r.valid ? 'Chain intact · ' + r.checked + ' entries' : 'BROKEN at ' + r.broken_at;
+      };
+      box.appendChild(el('div', { class: 'card' }, [el('div', { class: 'row' }, [el('h2', {}, page.total + ' entries'), v, status]),
+        table(['Time (UTC)', 'ID', 'Actor', 'Role', 'Action', 'Result', 'Hash'], page.items.map(function (e) {
+          return el('tr', {}, [el('td', { class: 'mono' }, e.ts_utc), el('td', { class: 'mono' }, e.id), el('td', {}, e.actor_id), el('td', {}, e.role), el('td', {}, e.action), el('td', {}, e.result), el('td', { class: 'mono' }, e.hash.slice(0, 12) + '…')]);
+        }))]));
+    } },
+    alerts: { roles: ['blue', 'admin'], label: 'Alerts', render: async function (box) {
+      var alerts = (await api('GET', '/api/alerts')).items;
+      box.appendChild(el('div', { class: 'card' }, [el('h2', {}, 'Anomaly alerts'),
+        alerts.length ? table(['ID', 'Severity', 'Status', 'Reason', ''], alerts.map(function (a) {
+          var b = el('button', {}, 'Acknowledge'); b.disabled = a.status !== 'open';
+          b.onclick = async function () { await api('POST', '/api/alerts/' + a.id + '/ack'); show('alerts'); };
+          return el('tr', {}, [el('td', { class: 'mono' }, a.id), el('td', {}, a.severity), el('td', {}, a.status), el('td', {}, a.reason), el('td', {}, b)]);
+        })) : el('p', { class: 'dim' }, 'No alerts. Run 8 tests in 2 minutes as Red to trigger one.')]));
+    } },
+    users: { roles: ['admin'], label: 'Users', render: async function (box) {
+      var users = (await api('GET', '/api/users')).items;
+      box.appendChild(el('div', { class: 'card' }, [el('h2', {}, 'Role management'),
+        table(['Email', 'Name', 'Role', 'Active', ''], users.map(function (u) {
+          var b = el('button', {}, u.active ? 'Deactivate' : 'Activate'); b.disabled = u.id === me.id;
+          b.onclick = async function () { await api('PATCH', '/api/users/' + u.id, { active: !u.active }); show('users'); };
+          return el('tr', {}, [el('td', {}, u.email), el('td', {}, u.name), el('td', {}, u.role), el('td', {}, String(u.active)), el('td', {}, b)]);
+        }))]));
+    } }
+  };
+
+  async function show(name) {
+    tab = name;
+    var box = document.getElementById('view'); box.textContent = '';
+    [].forEach.call(document.getElementById('tabs').children, function (b) { b.setAttribute('aria-selected', String(b.dataset.tab === name)); });
+    try { await VIEWS[name].render(box); } catch (e) { box.appendChild(el('p', { class: 'err' }, e.message)); }
+  }
+  function enter(user) {
+    me = user;
+    document.getElementById('login').hidden = true;
+    document.getElementById('app').hidden = false;
+    document.getElementById('logout').hidden = false;
+    document.getElementById('who').textContent = user.email + ' · ' + user.role;
+    var tabs = document.getElementById('tabs'); tabs.textContent = '';
+    var names = Object.keys(VIEWS).filter(function (k) { return VIEWS[k].roles.indexOf(user.role) !== -1; });
+    names.forEach(function (k) {
+      var b = el('button', { role: 'tab', 'data-tab': k }, VIEWS[k].label);
+      b.onclick = function () { show(k); };
+      tabs.appendChild(b);
+    });
+    show(names[0]);
+  }
+  document.getElementById('form').onsubmit = async function (ev) {
+    ev.preventDefault();
+    var err = document.getElementById('loginErr'); err.textContent = '';
+    try {
+      var r = await api('POST', '/api/auth/login', { email: document.getElementById('email').value, password: document.getElementById('pw').value });
+      token = r.token; document.getElementById('pw').value = ''; enter(r.user);
+    } catch (e) { err.textContent = e.message; }
+  };
+  [].forEach.call(document.querySelectorAll('[data-who]'), function (b) {
+    b.onclick = function () { document.getElementById('email').value = b.dataset.who + '@demo.io'; document.getElementById('pw').focus(); };
+  });
+  document.getElementById('logout').onclick = function () { token = null; me = null; location.reload(); };
+})();
+</script>
+</body>
+</html>

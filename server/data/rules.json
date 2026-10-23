@@ -1,0 +1,10 @@
+[
+  {"id": "RULE-001", "name": "Instruction override guard", "pattern_type": "keyword", "pattern": "ignore", "action": "BLOCK", "enabled": true, "created_by": "blue@demo.io", "note": "Catches \"ignore previous instructions\" style overrides."},
+  {"id": "RULE-002", "name": "System prompt exfiltration guard", "pattern_type": "keyword", "pattern": "system prompt", "action": "BLOCK", "enabled": true, "created_by": "blue@demo.io", "note": "Any request naming the system prompt is blocked."},
+  {"id": "RULE-003", "name": "Canary token protection", "pattern_type": "keyword", "pattern": "CANARY-7731", "action": "BLOCK", "enabled": true, "created_by": "blue@demo.io", "note": "The internal canary token must never be echoed."},
+  {"id": "RULE-004", "name": "Persona escalation detector", "pattern_type": "regex", "pattern": "(act as|role-?play)", "action": "BLOCK", "enabled": true, "created_by": "blue@demo.io", "note": "Blocks persona-swap jailbreak openers."},
+  {"id": "RULE-005", "name": "Configuration disclosure watch", "pattern_type": "keyword", "pattern": "configuration", "action": "FLAG", "enabled": true, "created_by": "blue@demo.io", "note": "Flags attempts to enumerate the hidden configuration."},
+  {"id": "RULE-006", "name": "Authority spoof guard", "pattern_type": "regex", "pattern": "(developer message|grant (me )?(all|elevated|admin))", "action": "FLAG", "enabled": true, "created_by": "admin@demo.io", "note": "Flags claimed admin or developer authority."},
+  {"id": "RULE-007", "name": "Encoding obfuscation watch", "pattern_type": "encoding", "pattern": "(base64|rot13|hex-?encoded|SWdub3Jl)", "action": "FLAG", "enabled": true, "created_by": "blue@demo.io", "note": "Flags encoded or obfuscated payloads."},
+  {"id": "RULE-008", "name": "Non-English evasion watch", "pattern_type": "locale", "pattern": "(traduis|translate|language switch|règles|toutes les)", "action": "FLAG", "enabled": true, "created_by": "blue@demo.io", "note": "Flags policy-dodging language switches."}
+]
