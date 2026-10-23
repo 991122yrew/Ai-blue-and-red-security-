@@ -93,3 +93,19 @@ The main site (`index.html`) detects a backend at startup:
 - The audit view loads the newest 500 entries; the hash chain is verified server-side over all of them.
 - The sandbox, target model and detectors are simulations; there is no real model behind the runs.
 - Sessions live in memory (reload = sign in again); there is no refresh-token flow.
+
+## Deploy the API (Render)
+
+1. Sign in at https://render.com with GitHub, then **New → Blueprint** and pick this repo.
+   `render.yaml` creates a free Docker web service with a generated `SECRET_KEY` and
+   `CORS_ORIGIN` set to `https://991122yrew.github.io`.
+2. When it is live, open `https://<your-service>.onrender.com/api/health`; it should return `{"status": "ok", ...}`.
+3. Put that origin in `config.js`: `window.RB_API_URL = 'https://<your-service>.onrender.com';`, commit and push.
+   GitHub Pages then runs in Live API mode.
+
+Notes for a public deployment:
+
+- The free plan's disk is ephemeral and the service sleeps when idle (first request takes ~30 s),
+  so the SQLite database resets on restart. Use a paid plan with a disk (`DB_PATH=/data/sentinel.db`) to keep data.
+- The one-click demo buttons use the public demo password, so anyone can sign in as Admin.
+  Fine for a hackathon demo; for anything real set `SEED_DEMO=0` and create real users.

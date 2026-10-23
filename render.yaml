@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: redblue-sentinel
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: CORS_ORIGIN
+        value: https://991122yrew.github.io
+      - key: HOST
+        value: 0.0.0.0
+      - key: SEED_DEMO
+        value: "1"

@@ -466,7 +466,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise
 
     def static(self, path):
-        pages = {"/": "index.html", "/index.html": "index.html", "/live.html": "live.html"}
+        pages = {"/": "index.html", "/index.html": "index.html", "/live.html": "live.html", "/config.js": "config.js"}
         if path not in pages:
             raise ApiError(404, "Not found.")
         f = STATIC_ROOT / pages[path]
