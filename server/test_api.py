@@ -159,8 +159,9 @@ class ApiTest(unittest.TestCase):
         self.call("POST", "/api/runs", {"test_id": "T-PI-001"}, token=red)
         db = app.Handler.store.db
         db.execute("DROP TRIGGER audit_no_update")          # an attacker with raw DB access
-        db.execute("UPDATE audit SET result='OK' WHERE action='TEST_EXECUTED'")
+        changed = db.execute("UPDATE audit SET result='OK' WHERE action='RUN_TEST'").rowcount
         db.commit()
+        self.assertEqual(changed, 1)
         v = self.call("GET", "/api/audit/verify", token=blue)[1]
         self.assertFalse(v["valid"])
         self.assertTrue(v["broken_at"].startswith("EVT-"))
@@ -171,7 +172,7 @@ class ApiTest(unittest.TestCase):
         for _ in range(8):
             self.call("POST", "/api/runs", {"test_id": "T-PI-001"}, token=red)
         alerts = self.call("GET", "/api/alerts", token=blue)[1]["items"]
-        self.assertIn("burst", {a["kind"] for a in alerts})
+        self.assertIn("burst_activity", {a["kind"] for a in alerts})
         aid = alerts[0]["id"]
         self.assertEqual(self.call("POST", "/api/alerts/%s/ack" % aid, token=blue)[1]["status"], "acknowledged")
         self.assertIn("ALERT_RAISED", self.audit_actions(blue))
@@ -190,6 +191,43 @@ class ApiTest(unittest.TestCase):
         red, admin = self.login("red"), self.login("admin")
         self.call("PATCH", "/api/users/usr_red", {"active": False}, token=admin)
         self.assertEqual(self.call("GET", "/api/me", token=red)[0], 401)
+
+    def test_front_end_contract(self):
+        """Endpoints and names the main site (index.html) relies on."""
+        red, blue, admin = self.login("red"), self.login("blue"), self.login("admin")
+        # UI-reported denial is logged against the caller and counted
+        self.assertEqual(self.call("POST", "/api/events/denied", {"resource": "/app/admin"}, token=red)[0], 201)
+        self.assertEqual(self.call("POST", "/api/events/denied", {"resource": "no-slash"}, token=red)[0], 400)
+        mine = self.call("GET", "/api/audit/mine", token=red)[1]["items"]
+        self.assertIn("ACCESS_DENIED", [e["action"] for e in mine])
+        self.assertTrue(all(e["actor_id"] == "red@demo.io" for e in mine))
+        # directory is Blue/Admin only
+        self.assertEqual(self.call("GET", "/api/directory", token=red)[0], 403)
+        self.assertEqual(len(self.call("GET", "/api/directory", token=blue)[1]["items"]), 3)
+        # action names match the UI's labels
+        self.call("POST", "/api/runs", {"test_id": "T-PI-001"}, token=red)
+        self.call("POST", "/api/auth/login", {"email": "red@demo.io", "password": "bad"})
+        actions = set(self.audit_actions(blue))
+        self.assertTrue({"RUN_TEST", "LOGIN_FAILED", "ACCESS_DENIED", "LOGIN_SUCCESS"} <= actions)
+        # em-dash outcomes: red sees only the generic outcome
+        run = self.call("POST", "/api/runs", {"test_id": "T-PI-001"}, token=red)[1]
+        self.assertEqual(run["reasoning"][0]["outcome"], "Blocking rule hit")
+        blue_run = self.call("GET", "/api/runs", token=blue)[1]["items"][0]
+        self.assertIn("—", blue_run["reasoning"][0]["outcome"])
+
+    def test_lock_session_and_user_audit_names(self):
+        red, blue, admin = self.login("red"), self.login("blue"), self.login("admin")
+        for _ in range(8):
+            self.call("POST", "/api/runs", {"test_id": "T-PI-001"}, token=red)
+        aid = self.call("GET", "/api/alerts", token=blue)[1]["items"][0]["id"]
+        self.assertEqual(self.call("POST", "/api/alerts/%s/lock-session" % aid, token=blue)[0], 403)
+        self.assertEqual(self.call("POST", "/api/alerts/%s/lock-session" % aid, token=admin)[0], 200)
+        alert = next(a for a in self.call("GET", "/api/alerts", token=admin)[1]["items"] if a["id"] == aid)
+        self.assertEqual((alert["status"], alert["locked"]), ("acknowledged", 1))
+        self.call("PATCH", "/api/users/usr_blue", {"role": "red"}, token=admin)
+        self.call("PATCH", "/api/users/usr_blue", {"active": True}, token=admin)
+        actions = self.audit_actions(admin)
+        self.assertTrue({"SESSION_LOCKED", "ROLE_CHANGED", "USER_STATUS"} <= set(actions))
 
     def test_csv_formula_injection_neutralised(self):
         self.assertEqual(app.csv_safe("=1+1"), "'=1+1")

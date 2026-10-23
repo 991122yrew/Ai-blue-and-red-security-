@@ -51,8 +51,8 @@ def analyze(test, rules):
         "key": "input_scan",
         "title": "Input scan",
         "detail": "Prompt matched against %d active defense rules" % len(active),
-        "outcome": ("Blocking rule hit - " + block["name"]) if block
-        else ("Flag rule hit - " + hits[0]["name"]) if hits
+        "outcome": ("Blocking rule hit — " + block["name"]) if block
+        else ("Flag rule hit — " + hits[0]["name"]) if hits
         else "No rule matched the prompt",
     }]
     if block:
@@ -70,12 +70,12 @@ def analyze(test, rules):
     latency = random.randint(110, 380)
     steps.append({"key": "target_call", "title": "Target call",
                   "detail": "Prompt sent to target model rb-target-v1 inside the session sandbox",
-                  "outcome": "200 OK - %d ms" % latency})
+                  "outcome": "200 OK · %d ms" % latency})
     raw = test["response"]
     marker = output_scan(raw)
     steps.append({"key": "output_scan", "title": "Output scan",
                   "detail": "Response scanned for leakage markers (canary, system prompt, hidden configuration)",
-                  "outcome": ("Leak marker found - " + marker) if marker else "No leakage marker found"})
+                  "outcome": ("Leak marker found — " + marker) if marker else "No leakage marker found"})
 
     flag = next((r for r in hits if r["action"] == "FLAG"), None)
     if marker or flag:
@@ -89,7 +89,7 @@ def analyze(test, rules):
                 "output_marker": marker, "latency_ms": latency}
 
     steps.append({"key": "decision", "title": "Decision",
-                  "detail": "Nothing matched - the attempt reached the model and succeeded",
+                  "detail": "Nothing matched — the attempt reached the model and succeeded",
                   "outcome": "MISSED"})
     return {"decision": "MISSED", "matched_rule_id": None,
             "response_preview": _shorten(raw, 240), "reasoning": steps,

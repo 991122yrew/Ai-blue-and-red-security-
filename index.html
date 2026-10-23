@@ -1221,6 +1221,16 @@ function appendAudit(db, entry) {
   return _chain;
 }
 async function verifyChain(db) {
+  if (API.mode) {
+    const r = await apiCall('GET', '/api/audit/verify');
+    return {
+      valid: r.valid,
+      broken_at: r.broken_at,
+      checked: r.checked,
+      ts: iso(Date.now()),
+      head: r.head
+    };
+  }
   await _chain;
   let prev = GENESIS,
     broken = null,
@@ -1357,6 +1367,135 @@ function toast(msg, tone, icon) {
 }
 
 /* ---------- seed the store ---------------------------------------------- */
+/* ---------- real backend adapter (API mode) -------------------------------
+   When the page is served by server/app.py (or opened with ?api=<origin>) every
+   action goes through the real API and the in-memory store is filled from it.
+   Without a reachable API the original Demo Mode below is used unchanged.    */
+const API = {
+  base: '',
+  mode: false,
+  token: null
+};
+async function detectApi() {
+  try {
+    const q = new URLSearchParams(location.search).get('api');
+    const base = (q || (location.protocol.indexOf('http') === 0 ? location.origin : '')).replace(/\/$/, '');
+    if (!base) return;
+    const r = await fetch(base + '/api/health', {
+      cache: 'no-store'
+    });
+    const j = await r.json();
+    if (j && j.status === 'ok') {
+      API.base = base;
+      API.mode = true;
+    }
+  } catch (e) {}
+}
+async function apiCall(method, path, body) {
+  const headers = {
+    'Content-Type': 'application/json'
+  };
+  if (API.token) headers.Authorization = 'Bearer ' + API.token;
+  const res = await fetch(API.base + path, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
+  let data = {};
+  try {
+    data = await res.json();
+  } catch (e) {}
+  if (!res.ok) {
+    if (res.status === 401 && API.token) {
+      API.token = null;
+      location.reload();
+    }
+    const err = new Error(data.error || 'Request failed (' + res.status + ')');
+    err.status = res.status;
+    throw err;
+  }
+  return data;
+}
+function mapRun(r, db) {
+  const t = db.tests.filter(x => x.id === r.test_id)[0] || {};
+  const u = db.users.filter(x => x.id === r.user_id)[0];
+  return {
+    id: r.id,
+    session_id: r.session_id,
+    user_id: r.user_id,
+    user_email: r.actor,
+    role: u ? u.role : 'red',
+    test_id: r.test_id,
+    test_title: t.title || r.test_id,
+    category: r.category,
+    severity: t.severity || 0,
+    decision: r.decision,
+    risk_score: r.risk_score,
+    risk_label: r.risk_label,
+    matched_rule_id: r.matched_rule_id || null,
+    response_preview: r.response_preview,
+    response_raw: r.response_preview,
+    output_marker: null,
+    reasoning: r.reasoning,
+    latency_ms: r.latency_ms,
+    ts: r.ts_utc,
+    simulated: false
+  };
+}
+function mapAlert(a, db) {
+  const u = db.users.filter(x => x.email === a.subject)[0];
+  return {
+    id: a.id,
+    ts: a.ts_utc,
+    type: a.kind,
+    severity: a.severity,
+    user_id: u ? u.id : a.subject,
+    reason: a.reason,
+    status: a.status === 'open' ? 'open' : 'ack',
+    locked: !!a.locked
+  };
+}
+async function hydrate(db) {
+  const me = db.session.user,
+    priv = me.role === 'blue' || me.role === 'admin';
+  db.tests = (await apiCall('GET', '/api/tests')).items;
+  db.users = me.role === 'admin' ? (await apiCall('GET', '/api/users')).items : priv ? (await apiCall('GET', '/api/directory')).items : [me];
+  db.rules = priv ? (await apiCall('GET', '/api/rules')).items.map(r => Object.assign({}, r, {
+    updated_at: r.created_at
+  })) : [];
+  db.runs = (await apiCall('GET', '/api/runs')).items.reverse().map(r => mapRun(r, db));
+  db.audit = (await apiCall('GET', priv ? '/api/audit?limit=500' : '/api/audit/mine')).items.slice().reverse();
+  db.alerts = priv ? (await apiCall('GET', '/api/alerts')).items.map(a => mapAlert(a, db)) : [];
+}
+async function refreshApi(db, commit) {
+  await hydrate(db);
+  commit();
+}
+async function buildApiStore() {
+  return {
+    users: USERS.map(u => Object.assign({}, u)),
+    tests: TESTS.map(t => Object.assign({}, t)),
+    rules: [],
+    runs: [],
+    audit: [],
+    alerts: [],
+    session: {
+      user: null,
+      sessionId: null,
+      startedAt: null
+    },
+    ui: {
+      live: true,
+      selectedTest: 'T-PI-002'
+    },
+    meta: {
+      builtAt: iso(Date.now()),
+      sessionTtlMin: 10,
+      demoMode: false,
+      apiMode: true
+    }
+  };
+}
 async function buildStore() {
   const now = Date.now();
   const users = USERS.map(u => Object.assign({}, u));
@@ -2746,7 +2885,7 @@ function PublicFooter() {
     className: "text-[13px] text-rb-dim mt-3 max-w-sm leading-relaxed"
   }, SITE.tagline + '.'), /*#__PURE__*/React.createElement("p", {
     className: "text-[12.5px] text-rb-dim mt-3"
-  }, "Demo Mode build \u2014 every test, result and audit entry on this site is seeded or simulated in your browser.")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  }, API.mode ? "Live API build \u2014 accounts, runs, rules and the audit log are served by the backend." : "Demo Mode build \u2014 every test, result and audit entry on this site is seeded or simulated in your browser.")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "text-[12px] uppercase tracking-[.09em] text-rb-dim font-medium mb-3"
   }, "Product"), /*#__PURE__*/React.createElement("ul", {
     className: "space-y-2 text-[13px]"
@@ -2885,7 +3024,7 @@ function Landing() {
     tone: "ok",
     icon: "server",
     dot: "pulse"
-  }, "Demo Mode \u2014 no backend required")), /*#__PURE__*/React.createElement("h1", {
+  }, API.mode ? "Live API \u2014 connected to the backend" : "Demo Mode \u2014 no backend required")), /*#__PURE__*/React.createElement("h1", {
     className: "font-display font-bold tracking-[-.02em] text-[40px] sm:text-[52px] lg:text-[56px] leading-[1.04]"
   }, "Break your AI safely.", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("span", {
     className: "grad-text"
@@ -3458,6 +3597,13 @@ function go(path) {
 }
 const defaultRoute = () => '/app/dashboard';
 async function runTest(db, commit, test, user) {
+  if (API.mode) {
+    const raw = await apiCall('POST', '/api/runs', {
+      test_id: test.id
+    });
+    await refreshApi(db, commit);
+    return db.runs.filter(r => r.id === raw.id)[0] || mapRun(raw, db);
+  }
   const sid = 'sess_' + Math.random().toString(16).slice(2, 6);
   const active = db.rules.filter(r => r.enabled);
   const res = analyze(test, active, {});
@@ -3601,10 +3747,10 @@ function Sidebar({
   }, /*#__PURE__*/React.createElement("div", {
     className: "flex items-center gap-2 mb-1.5"
   }, /*#__PURE__*/React.createElement(LivePill, {
-    label: "Demo Mode"
+    label: API.mode ? "Live API" : "Demo Mode"
   })), /*#__PURE__*/React.createElement("p", {
     className: "text-[11.5px] text-rb-dim leading-relaxed"
-  }, "Data is seeded in your browser. Reloading resets the sandbox."), /*#__PURE__*/React.createElement("div", {
+  }, API.mode ? "Connected to the backend. Runs, rules and the audit log are stored on the server." : "Data is seeded in your browser. Reloading resets the sandbox."), /*#__PURE__*/React.createElement("div", {
     className: "mono text-[10.5px] text-rb-dim mt-2"
   }, db.runs.length + ' runs · ' + db.audit.length + ' audit entries'))), /*#__PURE__*/React.createElement("div", {
     className: "p-3 border-t border-rb-line"
@@ -3715,7 +3861,7 @@ function Topbar({
     type: "button",
     onClick: async () => {
       setMenu(false);
-      const r = await onSwitch(u.email);
+      const r = await onSwitch(u.email, DEMO_PW);
       if (r.ok) {
         toast('Switched to ' + u.email + ' (' + u.role + ')', 'ok');
         go(defaultRoute());
@@ -3805,6 +3951,12 @@ function AccessDenied({
   const [logged, setLogged] = useState(false);
   useEffect(() => {
     if (logged) return;
+    if (API.mode) {
+      apiCall('POST', '/api/events/denied', {
+        resource: path
+      }).catch(() => {}).then(() => setLogged(true));
+      return;
+    }
     appendAudit(db, {
       actor_id: db.session.user.email,
       role: db.session.user.role,
@@ -4287,6 +4439,25 @@ function RuleModal({
   }));
   async function save() {
     const user = db.session.user;
+    if (API.mode) {
+      try {
+        const body = {
+          name: f.name,
+          pattern_type: f.pattern_type,
+          pattern: f.pattern,
+          action: f.action,
+          enabled: !!f.enabled,
+          note: f.note || ''
+        };
+        if (rule) await apiCall('PATCH', '/api/rules/' + rule.id, body);else await apiCall('POST', '/api/rules', body);
+        await refreshApi(db, commit);
+        toast(rule ? 'Rule ' + rule.id + ' updated' : 'Rule created', 'ok');
+        onClose();
+      } catch (e) {
+        toast(e.message, 'danger');
+      }
+      return;
+    }
     if (rule) {
       const r = db.rules.filter(x => x.id === rule.id)[0];
       Object.assign(r, {
@@ -4422,6 +4593,18 @@ function BluePanel() {
   const feed = q ? runs.filter(r => (r.id + r.test_id + r.category + r.user_email + r.decision).toLowerCase().indexOf(q.toLowerCase()) !== -1) : runs;
   const m = metrics(db);
   async function toggleRule(r) {
+    if (API.mode) {
+      try {
+        await apiCall('PATCH', '/api/rules/' + r.id, {
+          enabled: !r.enabled
+        });
+        await refreshApi(db, commit);
+        toast('Rule ' + r.id + ' ' + (r.enabled ? 'disabled' : 'enabled'), 'info');
+      } catch (e) {
+        toast(e.message, 'danger');
+      }
+      return;
+    }
     r.enabled = !r.enabled;
     r.updated_at = iso(Date.now());
     await appendAudit(db, {
@@ -5036,6 +5219,7 @@ function AuditLog() {
     return Object.keys(s).sort();
   }, [db.audit.length]);
   useEffect(() => {
+    if (API.mode) refreshApi(db, commit).catch(() => {});
     verifyChain(db).then(setVer);
   }, []);
   const rows = db.audit.filter(e => {
@@ -5059,7 +5243,28 @@ function AuditLog() {
     setTo('');
     setQ('');
   };
-  function exportCsv() {
+  async function exportCsv() {
+    if (API.mode) {
+      try {
+        const res = await fetch(API.base + '/api/audit/export.csv', {
+          headers: {
+            Authorization: 'Bearer ' + API.token
+          }
+        });
+        if (!res.ok) {
+          const j = await res.json().catch(() => ({}));
+          await refreshApi(db, commit);
+          toast(j.error || 'Export denied — the attempt is logged', 'danger');
+          return;
+        }
+        downloadText('redblue-sentinel-audit-' + iso(Date.now()).slice(0, 10) + '.csv', await res.text());
+        await refreshApi(db, commit);
+        toast('Audit log exported to CSV', 'ok');
+      } catch (e) {
+        toast(e.message, 'danger');
+      }
+      return;
+    }
     const head = ['timestamp_utc', 'event_id', 'actor', 'role', 'action', 'resource', 'test_id', 'result', 'ip', 'prev_hash', 'hash'];
     const lines = [head.join(',')].concat(rows.map(e => [e.ts_utc, e.id, e.actor_id, e.role, e.action, e.resource, e.test_id, e.result, e.ip, e.prev_hash, e.hash].map(v => '"' + String(v).replace(/"/g, '""') + '"').join(',')));
     downloadText('redblue-sentinel-audit-' + iso(Date.now()).slice(0, 10) + '.csv', lines.join('\n'));
@@ -5349,6 +5554,16 @@ function Alerts() {
     off_hours: 'Off-hours activity'
   })[t] || t;
   async function ack(a) {
+    if (API.mode) {
+      try {
+        await apiCall('POST', '/api/alerts/' + a.id + '/ack');
+        await refreshApi(db, commit);
+        toast(a.id + ' acknowledged', 'ok');
+      } catch (e) {
+        toast(e.message, 'danger');
+      }
+      return;
+    }
     a.status = 'ack';
     await appendAudit(db, {
       actor_id: user.email,
@@ -5361,6 +5576,16 @@ function Alerts() {
     toast(a.id + ' acknowledged', 'ok');
   }
   async function lockSession(a) {
+    if (API.mode) {
+      try {
+        await apiCall('POST', '/api/alerts/' + a.id + '/lock-session');
+        await refreshApi(db, commit);
+        toast('Session lock recorded — ' + a.id + ' logged', 'warn');
+      } catch (e) {
+        toast(e.message, 'danger');
+      }
+      return;
+    }
     a.status = 'ack';
     a.locked = true;
     await appendAudit(db, {
@@ -5495,6 +5720,18 @@ function Admin() {
   } = useDB();
   const user = db.session.user;
   async function setRole(u, role) {
+    if (API.mode) {
+      try {
+        await apiCall('PATCH', '/api/users/' + u.id, {
+          role
+        });
+        await refreshApi(db, commit);
+        toast(u.email + ': role changed to ' + role, 'warn');
+      } catch (e) {
+        toast(e.message, 'danger');
+      }
+      return;
+    }
     const before = u.role;
     u.role = role;
     if (u.id === user.id) user.role = role;
@@ -5509,6 +5746,18 @@ function Admin() {
     toast(u.email + ': role ' + before + ' → ' + role, 'warn');
   }
   async function toggleActive(u) {
+    if (API.mode) {
+      try {
+        await apiCall('PATCH', '/api/users/' + u.id, {
+          active: !u.active
+        });
+        await refreshApi(db, commit);
+        toast(u.email + (u.active ? ' disabled' : ' enabled'), u.active ? 'danger' : 'ok');
+      } catch (e) {
+        toast(e.message, 'danger');
+      }
+      return;
+    }
     u.active = !u.active;
     await appendAudit(db, {
       actor_id: user.email,
@@ -5667,13 +5916,13 @@ function DBProvider({
   children
 }) {
   const [db, setDb] = useState(null);
-  const [, force] = useReducer(x => x + 1, 0);
+  const [ver, force] = useReducer(x => x + 1, 0);
   const commit = useCallback(() => {
     force();
   }, []);
   useEffect(() => {
     let alive = true;
-    buildStore().then(s => {
+    detectApi().then(() => API.mode ? buildApiStore() : buildStore()).then(s => {
       if (!alive) return;
       window.__RB_STORE__ = s;
       setDb(s);
@@ -5682,9 +5931,43 @@ function DBProvider({
       alive = false;
     };
   }, []);
+  useEffect(() => {
+    const t = setInterval(() => {
+      const d = window.__RB_STORE__;
+      if (API.mode && API.token && d && d.session.user) hydrate(d).then(force).catch(() => {});
+    }, 10000);
+    return () => clearInterval(t);
+  }, []);
   const login = useCallback(async (email, pw) => {
     const d = window.__RB_STORE__;
     const mail = String(email || '').trim().toLowerCase();
+    if (API.mode) {
+      try {
+        const r = await apiCall('POST', '/api/auth/login', {
+          email: mail,
+          password: pw
+        });
+        API.token = r.token;
+        const au = Object.assign({
+          active: true
+        }, r.user);
+        d.session.user = au;
+        d.session.sessionId = 'sess_' + Math.random().toString(16).slice(2, 6);
+        d.session.startedAt = iso(Date.now());
+        d.session.expiresAt = iso(Date.now() + d.meta.sessionTtlMin * 60000);
+        await hydrate(d);
+        commit();
+        return {
+          ok: true,
+          user: au
+        };
+      } catch (e) {
+        return {
+          ok: false,
+          message: e.message
+        };
+      }
+    }
     const u = d.users.filter(x => x.email.toLowerCase() === mail)[0];
     if (u && u.active && pw === DEMO_PW) {
       d.session.user = u;
@@ -5719,6 +6002,14 @@ function DBProvider({
   }, [commit]);
   const logout = useCallback(async () => {
     const d = window.__RB_STORE__;
+    if (API.mode) {
+      API.token = null;
+      d.users = USERS.map(u => Object.assign({}, u));
+      d.rules = [];
+      d.runs = [];
+      d.audit = [];
+      d.alerts = [];
+    }
     d.session.user = null;
     d.session.sessionId = null;
     d.session.startedAt = null;
@@ -5729,7 +6020,7 @@ function DBProvider({
     commit,
     login,
     logout
-  }), [db, commit, login, logout]);
+  }), [db, ver, commit, login, logout]);
   if (!db) {
     return /*#__PURE__*/React.createElement("div", {
       className: "min-h-screen grid place-items-center p-6"
@@ -5823,6 +6114,7 @@ function LiveTicker() {
   } = useDB();
   useEffect(() => {
     const t = setInterval(async () => {
+      if (API.mode) return;
       if (!db.session.user) return;
       if (Math.random() > 0.42) return;
       if (db.runs.length > 420) db.runs.splice(0, 40);
@@ -5963,6 +6255,5 @@ window.setTimeout(() => {
     }
   },9000);
 </script>
-<script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/vce701823e78c4301a35b7e07294d87301792088814092" integrity="sha512-UKNk8GbxkABxKcXYuLkO16EleLGUkcvJWtpSNmExE0Too3ZaFAxTscNWEc1OdAv5/BikHawapSCaiD2XCmp+Bw==" data-cf-beacon='{"version":"2024.11.0","token":"4edd5f8ec12a48cfa682ab8261b80a79","spa":2}' crossorigin="anonymous"></script>
 </body>
 </html>

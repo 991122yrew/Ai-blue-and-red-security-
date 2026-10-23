@@ -89,7 +89,8 @@ CREATE TABLE IF NOT EXISTS audit(
   actor_id TEXT, role TEXT, action TEXT, resource TEXT, test_id TEXT, result TEXT, ip TEXT,
   prev_hash TEXT NOT NULL, hash TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS alerts(
-  id TEXT PRIMARY KEY, kind TEXT, subject TEXT, severity TEXT, status TEXT, reason TEXT, ts_utc TEXT);
+  id TEXT PRIMARY KEY, kind TEXT, subject TEXT, severity TEXT, status TEXT, reason TEXT, ts_utc TEXT,
+  locked INTEGER NOT NULL DEFAULT 0);
 CREATE TRIGGER IF NOT EXISTS audit_no_update BEFORE UPDATE ON audit
   BEGIN SELECT RAISE(ABORT, 'audit log is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS audit_no_delete BEFORE DELETE ON audit
@@ -191,7 +192,7 @@ class Store:
             return
         n = self._count("SELECT COUNT(*) FROM alerts", ()) + 1
         alert_id = "ALR-%03d" % n
-        self.db.execute("INSERT INTO alerts VALUES(?,?,?,?,?,?,?)",
+        self.db.execute("INSERT INTO alerts(id,kind,subject,severity,status,reason,ts_utc) VALUES(?,?,?,?,?,?,?)",
                         (alert_id, kind, subject, severity, "open", reason, iso(now())))
         self.db.commit()
         self.audit("system", "system", "ALERT_RAISED", "/alerts/" + alert_id, "OK")
@@ -203,28 +204,28 @@ class Store:
             ago = lambda m: iso(t - timedelta(minutes=m))
             n = self._count("SELECT COUNT(*) FROM runs WHERE actor=? AND ts_utc>=?", (subject, ago(2)))
             if n >= 8:
-                self._raise("burst", subject, "High", "%d test runs within 2 minutes by %s (threshold: 8)" % (n, subject))
+                self._raise("burst_activity", subject, "High", "%d test runs within 2 minutes by %s (threshold: 8)" % (n, subject))
             row = self.db.execute(
                 "SELECT category, COUNT(*) c FROM runs WHERE actor=? AND ts_utc>=? GROUP BY category ORDER BY c DESC LIMIT 1",
                 (subject, ago(5))).fetchone()
             if row and row["c"] >= 5:
-                self._raise("category", subject, "Medium",
+                self._raise("category_hammering", subject, "Medium",
                             "%d %s runs within 5 minutes by %s (threshold: 5)" % (row["c"], row["category"], subject))
             row = self.db.execute(
                 "SELECT test_id, COUNT(*) c FROM runs WHERE actor=? AND decision='MISSED' AND ts_utc>=? "
                 "GROUP BY test_id ORDER BY c DESC LIMIT 1", (subject, ago(30))).fetchone()
             if row and row["c"] >= 3:
-                self._raise("repeat_miss", subject, "Medium",
+                self._raise("repeated_misses", subject, "Medium",
                             "%s missed %d times in 30 minutes by %s (threshold: 3)" % (row["test_id"], row["c"], subject))
             n = self._count("SELECT COUNT(*) FROM audit WHERE actor_id=? AND action='ACCESS_DENIED' AND ts_utc>=?",
                             (subject, ago(10)))
             if n >= 3:
-                self._raise("access_denied", subject, "High",
+                self._raise("forbidden_access", subject, "High",
                             "%d ACCESS_DENIED events in 10 minutes by %s (threshold: 3)" % (n, subject))
-            n = self._count("SELECT COUNT(*) FROM audit WHERE actor_id=? AND action='LOGIN_FAIL' AND ts_utc>=?",
+            n = self._count("SELECT COUNT(*) FROM audit WHERE actor_id=? AND action='LOGIN_FAILED' AND ts_utc>=?",
                             (subject, ago(LOGIN_WINDOW_MIN)))
             if n >= 4:
-                self._raise("failed_login", subject, "Medium",
+                self._raise("failed_logins", subject, "Medium",
                             "%d failed logins in %d minutes for %s (threshold: 4)" % (n, LOGIN_WINDOW_MIN, subject))
 
     # ---- auth ------------------------------------------------------------
@@ -232,7 +233,7 @@ class Store:
         email = (email or "").strip().lower()
         with self.lock:
             cutoff = iso(now() - timedelta(minutes=LOGIN_WINDOW_MIN))
-            fails = self._count("SELECT COUNT(*) FROM audit WHERE actor_id=? AND action='LOGIN_FAIL' AND ts_utc>=?",
+            fails = self._count("SELECT COUNT(*) FROM audit WHERE actor_id=? AND action='LOGIN_FAILED' AND ts_utc>=?",
                                 (email, cutoff))
             if fails >= LOGIN_LIMIT:
                 self.audit(email, "unknown", "LOGIN_LOCKED", "/api/auth/login", "DENIED", ip=ip)
@@ -244,7 +245,7 @@ class Store:
                 check_password(password or "", "00" * 16, "00" * 32)   # equalise timing
                 ok = False
             if not ok:
-                self.audit(email or "unknown", row["role"] if row else "unknown", "LOGIN_FAIL",
+                self.audit(email or "unknown", row["role"] if row else "unknown", "LOGIN_FAILED",
                            "/api/auth/login", "FAIL", ip=ip)
                 self.detect(email)
                 raise ApiError(401, "Invalid email or password.")
@@ -276,7 +277,7 @@ class Store:
             self.db.execute("INSERT INTO runs VALUES(:id,:session_id,:user_id,:actor,:test_id,:category,:decision,"
                             ":matched_rule_id,:risk_score,:risk_label,:latency_ms,:ts_utc,:response_preview,:reasoning)", run)
             self.db.commit()
-            self.audit(user["email"], user["role"], "TEST_EXECUTED", "/api/runs/" + run["id"],
+            self.audit(user["email"], user["role"], "RUN_TEST", "/api/runs/" + run["id"],
                        res["decision"], test_id=test["id"], ip=ip)
             self.detect(user["email"])
         return self.present_run(run, user["role"])
@@ -290,7 +291,7 @@ class Store:
             for s in steps:
                 if s["key"] == "input_scan":
                     s["detail"] = "Prompt scanned against the active defense policy"
-                    s["outcome"] = s["outcome"].split(" - ")[0]
+                    s["outcome"] = s["outcome"].split(" — ")[0]
         run["reasoning"] = steps
         run["session_ttl_min"] = SESSION_TTL_MIN
         return run
@@ -504,6 +505,20 @@ class Handler(BaseHTTPRequestHandler):
         if (method, path) == ("GET", "/api/me"):
             return self.send_json(200, {k: user[k] for k in ("id", "email", "name", "role", "title")})
 
+        if (method, path) == ("POST", "/api/events/denied"):
+            # the UI reports a screen the user's role cannot open; recorded against the caller
+            resource = str(self.body().get("resource", ""))[:200]
+            if not resource.startswith("/"):
+                raise ApiError(400, "resource must be a path.")
+            s.audit(user["email"], user["role"], "ACCESS_DENIED", "/api/v1" + resource, "DENIED", ip=self.ip())
+            s.detect(user["email"])
+            return self.send_json(201, {"logged": True})
+
+        if (method, path) == ("GET", "/api/directory"):
+            self.require(user, "blue", "admin", resource=res)
+            rows = s.db.execute("SELECT id,email,name,title,role,active,created_at FROM users").fetchall()
+            return self.send_json(200, {"items": [dict(r, active=bool(r["active"])) for r in rows]})
+
         if (method, path) == ("GET", "/api/tests"):
             tests = s.tests()
             if user["role"] == "red":
@@ -551,6 +566,10 @@ class Handler(BaseHTTPRequestHandler):
                 s.audit(user["email"], user["role"], "RULE_UPDATED", path, "OK", ip=self.ip())
             return self.send_json(200, {"id": m.group(1), "updated": list(r)})
 
+        if (method, path) == ("GET", "/api/audit/mine"):
+            rows = s.db.execute("SELECT * FROM audit WHERE actor_id=? ORDER BY seq DESC LIMIT 20",
+                                (user["email"],)).fetchall()
+            return self.send_json(200, {"items": [dict(r) for r in rows]})
         if (method, path) == ("GET", "/api/audit"):
             self.require(user, "blue", "admin", resource=res)
             try:
@@ -590,6 +609,17 @@ class Handler(BaseHTTPRequestHandler):
                 s.audit(user["email"], user["role"], "ALERT_ACK", "/api/alerts/" + m.group(1), "OK", ip=self.ip())
             return self.send_json(200, {"id": m.group(1), "status": "acknowledged"})
 
+        m = re.fullmatch(r"/api/alerts/(ALR-\d+)/lock-session", path)
+        if m and method == "POST":
+            self.require(user, "admin", resource=res)
+            with s.lock:
+                cur = s.db.execute("UPDATE alerts SET status='acknowledged', locked=1 WHERE id=?", (m.group(1),))
+                s.db.commit()
+                if not cur.rowcount:
+                    raise ApiError(404, "Unknown alert.")
+                s.audit(user["email"], user["role"], "SESSION_LOCKED", path, "OK", ip=self.ip())
+            return self.send_json(200, {"id": m.group(1), "locked": True})
+
         if (method, path) == ("GET", "/api/users"):
             self.require(user, "admin", resource=res)
             rows = s.db.execute("SELECT id,email,name,title,role,active,created_at FROM users").fetchall()
@@ -615,7 +645,8 @@ class Handler(BaseHTTPRequestHandler):
                 s.db.commit()
                 if not cur.rowcount:
                     raise ApiError(404, "Unknown user.")
-                s.audit(user["email"], user["role"], "USER_UPDATED", path, "OK", ip=self.ip())
+                s.audit(user["email"], user["role"], "ROLE_CHANGED" if "role" in upd else "USER_STATUS",
+                        "/api/v1/admin/users/" + m.group(1), "OK", ip=self.ip())
             return self.send_json(200, {"id": m.group(1), "updated": list(upd)})
 
         raise ApiError(404, "Not found.")

@@ -76,8 +76,20 @@ Configuration (environment variables): `HOST`, `PORT`, `DB_PATH`, `SECRET_KEY`,
 To use the console from the GitHub Pages site, open
 `live.html?api=https://your-api-host` (the API must be deployed separately).
 
-## Status
+## Two modes
 
-- The main site (`index.html`) is still the original in-browser demo with simulated data.
-- `live.html` is wired to the real API. Porting every screen of the main site to the API
-  is the next step.
+The main site (`index.html`) detects a backend at startup:
+
+- **Live API mode:** when served by `server/app.py` (or opened with `?api=https://your-api-host`),
+  sign-in, test runs, rules, alerts, role management, audit log, chain verification and CSV
+  export all go through the API. The sidebar shows "Live API" and data refreshes every 10 s.
+- **Demo Mode:** with no reachable API (for example plain GitHub Pages), the original
+  in-browser simulation runs unchanged, with seeded data that resets on reload.
+
+`live.html` is a smaller console for exercising the API directly.
+
+## Known limits
+
+- The audit view loads the newest 500 entries; the hash chain is verified server-side over all of them.
+- The sandbox, target model and detectors are simulations; there is no real model behind the runs.
+- Sessions live in memory (reload = sign in again); there is no refresh-token flow.
