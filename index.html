@@ -6046,10 +6046,26 @@ function DBProvider({
   }, children);
 }
 function useRoute() {
-  const [route, setRoute] = useState(location.hash.replace(/^#/, '') || '/');
+  const current = () => {
+    const raw = location.hash.replace(/^#/, '');
+    return raw.charAt(0) === '/' ? raw : '/';
+  };
+  const [route, setRoute] = useState(current);
   useEffect(() => {
     const h = () => {
-      setRoute(location.hash.replace(/^#/, '') || '/');
+      const raw = location.hash.replace(/^#/, '');
+      if (raw && raw.charAt(0) !== '/') {
+        /* in-page anchor such as #how: scroll to the section, keep the current route */
+        setTimeout(() => {
+          const el = document.getElementById(raw);
+          if (el) window.scrollTo({
+            top: el.getBoundingClientRect().top + window.scrollY - 72,
+            behavior: 'smooth'
+          });
+        }, 30);
+        return;
+      }
+      setRoute(current());
       window.scrollTo({
         top: 0,
         behavior: 'auto'
