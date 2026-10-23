@@ -3438,7 +3438,7 @@ function DocPage({
     className: "text-[14px] text-rb-dim mt-3 max-w-2xl"
   }, sub), /*#__PURE__*/React.createElement("p", {
     className: "mono text-[11.5px] text-rb-dim mt-4"
-  }, "Last updated 2026-10-03 \xB7 Version 1.0 (prototype)"))), /*#__PURE__*/React.createElement("div", {
+  }, "Last updated 2026-10-24 \xB7 Version 1.1 (prototype)"))), /*#__PURE__*/React.createElement("div", {
     className: "max-w-[900px] mx-auto px-4 py-10 grid lg:grid-cols-[200px_minmax(0,1fr)] gap-8"
   }, /*#__PURE__*/React.createElement("nav", {
     className: "lg:sticky lg:top-24 self-start",
@@ -3488,31 +3488,34 @@ function Terms() {
     icon: "scale",
     kicker: "Legal",
     title: "Terms & Conditions",
-    sub: "The rules for using the RedBlue Sentinel prototype and its simulated security environment.",
+    sub: "Plain-language rules for using the RedBlue Sentinel prototype. Short, and worth a read.",
     sections: [{
-      h: 'Acceptance of terms',
-      body: ['By opening RedBlue Sentinel you agree to these terms. If you do not agree, do not use the prototype.', 'These terms govern a hackathon prototype, not a commercial product. There is no service level, no support commitment and no fee.']
+      h: 'The short version',
+      body: ['RedBlue Sentinel is a hackathon prototype. It shows how AI safety testing can be run safely, with separate Red and Blue roles and a log nobody can quietly edit.', 'It is free, comes with no guarantees, and everything in it is simulated. Do not use it to test or attack real systems, and do not enter real passwords or personal data.', 'By using it you agree to the rules below.']
     }, {
-      h: 'Purpose of the prototype',
-      body: ['RedBlue Sentinel exists to demonstrate how adversarial AI safety testing can be run inside a controlled environment with role separation, risk scoring and a tamper-evident audit trail.', 'It is a demonstration environment. It is not a penetration-testing tool, not a compliance product, and not a substitute for a production security programme.']
+      h: 'What this prototype is',
+      body: ['A demonstration of role-based access, risk scoring, anomaly alerts and a tamper-evident audit trail for adversarial AI testing.', 'It is not a penetration-testing tool, not a compliance product and not a replacement for a real security programme.', 'The “AI model” being tested is a mock. It returns fixed answers and holds a fake canary token. No real model provider is called, and every test case is predefined, sanitized and harmless.']
     }, {
-      h: 'Simulated environment',
-      body: ['All adversarial content on this site is predefined, sanitized and benign. No real malicious payloads are included.', 'The target model is a mock. It holds a fake canary token and returns predetermined responses. No external model provider is called from this build.', 'All users, runs, detections, alerts and audit entries shown are seeded or generated in your own browser. They describe no real system, organization or person.']
+      h: 'Accounts and access',
+      body: ['The demo accounts (Red, Blue and Admin) are shared and their password is public. Anyone can sign in with them, so treat everything you do as visible to other visitors.', 'Never reuse a real password here. After 5 failed sign-ins in 5 minutes an account is locked for a few minutes, and an Admin can switch any account off.', 'Your role decides what you can open. Trying a screen your role does not own is blocked and recorded.']
     }, {
-      h: 'Acceptable use',
-      body: ['Use the prototype to explore the workflow, evaluate the design, or demonstrate it to judges and stakeholders.', 'Do not represent screenshots or outputs from this demo as evidence about a real system, or as the result of testing a real model.', 'Do not attempt to adapt the predefined test cases into functional attack payloads against any live system. The categories exist for classification, not instruction.']
+      h: 'What you may and may not do',
+      body: ['You may explore the workflow, evaluate the design and demonstrate it to judges, teachers or teammates.', 'You may not present screenshots or numbers from this demo as proof about a real system or a real model.', 'You may not turn the test cases into working attacks, probe the hosting service, overload it with automated requests, or try to read other people’s data or break the role boundaries.', 'If you find a weakness, report it (see the end of this page) instead of exploiting it.']
     }, {
-      h: 'No warranty',
-      body: ['The prototype is provided “as is”, without warranty of any kind, express or implied, including fitness for a particular purpose.', 'Risk scores, detection decisions and anomaly alerts are deterministic demonstrations of a scoring model. They are not security advice and should not be relied on to make a decision about a production AI system.']
+      h: 'Data and privacy',
+      body: ['In Demo Mode everything lives in your browser’s memory and disappears when you reload. Nothing is sent anywhere.', 'In Live API mode the server stores the activity you create: your account email and role, the tests you run and their results, rule changes, and audit entries with a timestamp and your IP address. Passwords are stored only as salted hashes.', 'The site sets no cookies, shows no ads and uses no third-party analytics. Page fonts and styles are loaded from Google Fonts and the Tailwind CDN, which can see your IP address when they serve those files.', 'Audit entries cannot be edited or deleted by design. Do not type personal or confidential information into rule names, notes or any other field.']
     }, {
-      h: 'Limitation of liability',
-      body: ['To the fullest extent permitted by law, the authors accept no liability for any loss or damage arising from use of, or inability to use, this prototype.']
+      h: 'Availability',
+      body: ['The prototype runs on free hosting. It may be slow to wake up after being idle, go offline without notice, or be reset, which erases its data. There are no backups and no support commitment.', 'Features and these terms can change at any time while the prototype evolves.']
     }, {
-      h: 'Intellectual property',
-      body: ['The RedBlue Sentinel name, its logo and the interface design are the work of ' + SITE.team + ' and are presented for evaluation at ' + SITE.event + '.', 'Third-party open-source components referenced by the architecture remain the property of their respective authors under their own licences.']
+      h: 'No warranty and limited liability',
+      body: ['The prototype is provided “as is”, without warranty of any kind. Risk scores, detections and alerts are demonstrations of a scoring model, not security advice, and must not be used to make decisions about a real AI system.', 'To the fullest extent the law allows, the authors are not liable for any loss or damage from using, or being unable to use, the prototype.']
+    }, {
+      h: 'Ownership and licences',
+      body: ['The RedBlue Sentinel name, logo and interface design belong to ' + SITE.team + ' and are shown for evaluation at ' + SITE.event + '.', 'Open-source libraries used by the prototype, such as React and Tailwind, stay with their authors under their own licences.']
     }, {
       h: 'Changes and contact',
-      body: ['These terms may be revised as the prototype evolves; the version date at the top of this page always applies.']
+      body: ['The date at the top of this page shows the current version. Continuing to use the prototype after a change means you accept the updated terms.', 'Questions or security reports: open an issue in the project repository linked in the footer and include steps to reproduce. Please do not post secrets or personal data there.']
     }]
   });
 }
