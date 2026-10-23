@@ -6,6 +6,9 @@
 <title>RedBlue Sentinel — Secure Adversarial Testing for AI Systems</title>
 <meta name="description" content="RedBlue Sentinel: a secure sandbox for adversarial AI safety testing with role separation, risk scoring, an append-only hash-chained audit trail and anomaly detection. Hack N Hills 2026 prototype." />
 <meta name="theme-color" content="#0A0D14" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230A0D14'/%3E%3Cpath d='M16 5l9 4v7c0 5-4 9-9 11-5-2-9-6-9-11V9z' fill='none' stroke='%237C5CFF' stroke-width='2'/%3E%3Cpath d='M16 5v22c-5-2-9-6-9-11V9z' fill='%23FF3B4E' opacity='.7'/%3E%3Cpath d='M16 5v22c5-2 9-6 9-11V9z' fill='%232F8CFF' opacity='.7'/%3E%3C/svg%3E" />
+<meta property="og:title" content="RedBlue Sentinel" />
+<meta property="og:description" content="Secure sandbox for adversarial AI safety testing with role separation, risk scoring and a hash-chained audit trail." />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -420,7 +423,7 @@ const SITE = {
   team: 'Team Sentinel',
   event: 'Hack N Hills 2026',
   school: 'Galgotias University, Manali',
-  github: 'https://github.com/your-team/redblue-sentinel'
+  github: 'https://github.com/991122yrew/Ai-blue-and-red-security-'
 };
 const C = {
   base: '#0A0D14',
@@ -4793,8 +4796,8 @@ function Dashboard() {
     Medium: 1,
     Low: 2
   };
-  const alerts = db.alerts.slice().sort((a, b) => w[a.severity] - w[b.severity] || new Date(b.ts) - new Date(a.ts)).slice(0, 5);
-  const recentAudit = db.audit.slice(-6).reverse();
+  const alerts = own ? [] : db.alerts.slice().sort((a, b) => w[a.severity] - w[b.severity] || new Date(b.ts) - new Date(a.ts)).slice(0, 5);
+  const recentAudit = (own ? db.audit.filter(e => e.actor_id === user.email) : db.audit).slice(-6).reverse();
   const cov = coverage(db);
   return /*#__PURE__*/React.createElement("div", {
     className: "space-y-5"
@@ -4871,7 +4874,7 @@ function Dashboard() {
         color: '#FF3B4E'
       }]
     }),
-    foot: "Hover any bucket for the exact split. The peak corresponds to the seeded burst that raised ALR-001."
+    foot: own ? "Hover any bucket for the exact split." : "Hover any bucket for the exact split. The peak corresponds to the seeded burst that raised ALR-001."
   }, /*#__PURE__*/React.createElement(AttacksLine, {
     data: ts
   }))), /*#__PURE__*/React.createElement(ChartFrame, {
@@ -4896,7 +4899,7 @@ function Dashboard() {
     foot: "Score = severity + outcome adjustment + category impact."
   }, /*#__PURE__*/React.createElement(RiskStack, {
     risk: m.risk
-  })), /*#__PURE__*/React.createElement(ChartFrame, {
+  })), own ? null : /*#__PURE__*/React.createElement(ChartFrame, {
     title: "Rule coverage",
     sub: "Share of test cases matched by an enabled rule",
     foot: cov.covered + ' of ' + cov.total + ' test cases are covered by at least one enabled rule.'
@@ -4942,8 +4945,8 @@ function Dashboard() {
     className: "mono text-[10.5px] text-rb-dim"
   }, ago(a.ts)))))) : /*#__PURE__*/React.createElement(EmptyState, {
     icon: "check",
-    title: "No anomalies",
-    desc: "All detectors are quiet."
+    title: own ? "Restricted" : "No anomalies",
+    desc: own ? "Anomaly alerts are visible to Blue Team and Admin." : "All detectors are quiet."
   })), /*#__PURE__*/React.createElement(Card, {
     className: "p-4"
   }, /*#__PURE__*/React.createElement("div", {
@@ -4992,11 +4995,11 @@ function Dashboard() {
     mono: true
   }), /*#__PURE__*/React.createElement(KV, {
     k: "Open alerts",
-    v: String(m.openAlerts),
-    tone: m.openAlerts ? 'warn' : 'ok'
+    v: own ? '—' : String(m.openAlerts),
+    tone: own || !m.openAlerts ? 'ok' : 'warn'
   }), /*#__PURE__*/React.createElement(KV, {
     k: "Audit entries",
-    v: String(db.audit.length)
+    v: own ? '—' : String(db.audit.length)
   }), /*#__PURE__*/React.createElement(KV, {
     k: "Chain",
     v: "SHA-256 \xB7 append-only",
@@ -5826,9 +5829,10 @@ function LiveTicker() {
       const actor = Math.random() < 0.85 ? db.users[0] : db.users[2];
       const weighted = [];
       db.tests.forEach(t => {
-        for (let i = 0; i < t.seedWeight; i++) weighted.push(t.id);
+        for (let i = 0; i < (t.seedWeight || 1); i++) weighted.push(t.id);
       });
       const test = db.tests.filter(t => t.id === weighted[Math.floor(Math.random() * weighted.length)])[0];
+      if (!test) return;
       const active = db.rules.filter(r => r.enabled);
       const res = analyze(test, active, {});
       const risk = riskScore(test, res.decision);
