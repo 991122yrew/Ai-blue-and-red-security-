@@ -94,6 +94,17 @@ Configuration (environment variables): `HOST`, `PORT`, `DB_PATH`, `SECRET_KEY`,
 To use the console from the GitHub Pages site, open
 `live.html?api=https://your-api-host` (the API must be deployed separately).
 
+## Accounts
+
+- **Sign-up:** "New here? Create an account" on the sign-in page creates a Red Team account (10+ character password).
+  Limited to `SIGNUPS_PER_HOUR` (default 5) per IP; set `ALLOW_SIGNUP=0` to turn it off.
+- **Change password:** from the account menu. It signs out every other session (tokens issued earlier stop working).
+- **Admin:** the Admin / Roles page can create users with any role, switch accounts off, and change roles.
+- **First admin without demo accounts:** set `SEED_DEMO=0`, `ADMIN_EMAIL` and `ADMIN_PASSWORD`; the admin is created on
+  startup if that email does not exist. When the demo accounts are off, the sign-in page hides the demo buttons.
+- **Behind a proxy (Render):** set `TRUST_PROXY=1` so rate limits and audit entries use the real client IP from
+  `X-Forwarded-For`. Only enable it behind a proxy you control.
+
 ## Two modes
 
 The main site (`index.html`) detects a backend at startup:

@@ -1376,7 +1376,9 @@ function toast(msg, tone, icon) {
 const API = {
   base: '',
   mode: false,
-  token: null
+  token: null,
+  signup: false,
+  demo: true
 };
 async function detectApi() {
   /* order: ?api= override, the origin serving this page (server/app.py), then config.js */
@@ -1394,6 +1396,8 @@ async function detectApi() {
       if (j && j.status === 'ok') {
         API.base = base;
         API.mode = true;
+        API.signup = !!j.signup;
+        API.demo = j.demo !== false;
         return;
       }
     } catch (e) {}
@@ -3291,6 +3295,29 @@ function Login() {
   const [pw, setPw] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const [signup, setSignup] = useState(false);
+  const [name, setName] = useState('');
+  const canSignup = API.mode && API.signup;
+  const hideDemo = API.mode && API.demo === false;
+  async function doSignup(e) {
+    e.preventDefault();
+    setBusy(true);
+    setErr('');
+    try {
+      await apiCall('POST', '/api/auth/register', {
+        email,
+        name,
+        password: pw
+      });
+      const r = await login(email, pw);
+      if (!r.ok) throw new Error(r.message);
+      toast('Account created — welcome, ' + r.user.name, 'ok');
+      go(defaultRoute(r.user.role));
+    } catch (e2) {
+      setErr(e2.message || 'Could not create the account');
+    }
+    setBusy(false);
+  }
   async function submit(e) {
     e.preventDefault();
     setBusy(true);
@@ -3354,12 +3381,24 @@ function Login() {
     }
   }), /*#__PURE__*/React.createElement("h1", {
     className: "font-display font-bold text-[24px]"
-  }, "Sign in"), /*#__PURE__*/React.createElement("p", {
+  }, signup ? 'Create your account' : 'Sign in'), /*#__PURE__*/React.createElement("p", {
     className: "text-[13px] text-rb-dim mt-1.5"
-  }, "Role-based access. Your role decides which panels exist for you."), /*#__PURE__*/React.createElement("form", {
+  }, signup ? 'New accounts start as Red Team operators. An Admin can change your role later.' : 'Role-based access. Your role decides which panels exist for you.'), /*#__PURE__*/React.createElement("form", {
     className: "mt-5 space-y-4",
-    onSubmit: submit
-  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    onSubmit: signup ? doSignup : submit
+  }, signup ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    htmlFor: "su-name",
+    className: "block text-[12px] uppercase tracking-[.08em] text-rb-dim font-medium mb-1.5"
+  }, "Your name"), /*#__PURE__*/React.createElement("input", {
+    id: "su-name",
+    type: "text",
+    autoComplete: "name",
+    value: name,
+    required: true,
+    maxLength: 80,
+    onChange: e => setName(e.target.value),
+    className: "w-full bg-rb-base border border-rb-line rounded-lg px-3 py-2.5 text-[13.5px] placeholder:text-rb-dim/60 focus:border-rb-blue/60"
+  })) : null, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
     htmlFor: "email",
     className: "block text-[12px] uppercase tracking-[.08em] text-rb-dim font-medium mb-1.5"
   }, "Email"), /*#__PURE__*/React.createElement("input", {
@@ -3377,10 +3416,11 @@ function Login() {
   }, "Password"), /*#__PURE__*/React.createElement("input", {
     id: "pw",
     type: "password",
-    autoComplete: "current-password",
+    autoComplete: signup ? "new-password" : "current-password",
     value: pw,
     required: true,
-    placeholder: "demo1234",
+    minLength: signup ? 10 : undefined,
+    placeholder: signup ? "At least 10 characters" : "demo1234",
     onChange: e => setPw(e.target.value),
     className: "w-full bg-rb-base border border-rb-line rounded-lg px-3 py-2.5 text-[13.5px] placeholder:text-rb-dim/60 focus:border-rb-blue/60"
   })), err ? /*#__PURE__*/React.createElement("div", {
@@ -3396,11 +3436,18 @@ function Login() {
     icon: "key",
     type: "submit",
     disabled: busy
-  }, busy ? 'Authenticating…' : 'Sign in')), /*#__PURE__*/React.createElement("p", {
+  }, busy ? signup ? 'Creating account…' : 'Authenticating…' : signup ? 'Create account' : 'Sign in')), canSignup ? /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => {
+      setSignup(!signup);
+      setErr('');
+    },
+    className: "mt-4 text-[12.5px] text-rb-blue hover:underline"
+  }, signup ? 'Already have an account? Sign in' : 'New here? Create an account') : null, /*#__PURE__*/React.createElement("p", {
     className: "text-[11.5px] text-rb-dim mt-5 leading-relaxed border-t border-rb-line pt-4"
   }, "Demo environment. All tests are simulated and sandboxed. No real model, data or network access is involved.")), /*#__PURE__*/React.createElement("div", {
     className: "flex flex-col gap-4"
-  }, /*#__PURE__*/React.createElement(Card, {
+  }, hideDemo ? null : /*#__PURE__*/React.createElement(Card, {
     className: "p-5"
   }, /*#__PURE__*/React.createElement("h2", {
     className: "font-display font-semibold text-[15px]"
@@ -3547,7 +3594,7 @@ function Terms() {
       body: ['A demonstration of role-based access, risk scoring, anomaly alerts and a tamper-evident audit trail for adversarial AI testing.', 'It is not a penetration-testing tool, not a compliance product and not a replacement for a real security programme.', 'The “AI model” being tested is a mock. It returns fixed answers and holds a fake canary token. No real model provider is called, and every test case is predefined, sanitized and harmless.']
     }, {
       h: 'Accounts and access',
-      body: ['The demo accounts (Red, Blue and Admin) are shared and their password is public. Anyone can sign in with them, so treat everything you do as visible to other visitors.', 'Never reuse a real password here. After 5 failed sign-ins in 5 minutes an account is locked for a few minutes, and an Admin can switch any account off.', 'Your role decides what you can open. Trying a screen your role does not own is blocked and recorded.']
+      body: ['The demo accounts (Red, Blue and Admin) are shared and their password is public. Anyone can sign in with them, so treat everything you do as visible to other visitors.', 'You can also create your own account on the sign-in page. New accounts start as Red Team operators and an Admin can change the role. Use a password of at least 10 characters that you do not use anywhere else, and change it any time from the account menu.', 'Never reuse a real password on the shared demo accounts. After 5 failed sign-ins in 5 minutes an account is locked for a few minutes, and an Admin can switch any account off.', 'Your role decides what you can open. Trying a screen your role does not own is blocked and recorded.']
     }, {
       h: 'What you may and may not do',
       body: ['You may explore the workflow, evaluate the design and demonstrate it to judges, teachers or teammates.', 'You may not present screenshots or numbers from this demo as proof about a real system or a real model.', 'You may not turn the test cases into working attacks, probe the hosting service, overload it with automated requests, or try to read other people’s data or break the role boundaries.', 'If you find a weakness, report it (see the end of this page) instead of exploiting it.']
@@ -3907,10 +3954,11 @@ function Topbar({
     onClick: () => setMenu(false),
     className: "block px-2 py-2 rounded-lg text-[12.5px] text-rb-dim hover:text-rb-ink hover:bg-white/5"
   }, l[0]))), /*#__PURE__*/React.createElement("div", {
-    className: "pt-2 border-t border-rb-line"
+    className: "pt-2 border-t border-rb-line",
+    hidden: API.mode && API.demo === false
   }, /*#__PURE__*/React.createElement("div", {
     className: "text-[11px] uppercase tracking-[.08em] text-rb-dim font-medium px-2 pb-2"
-  }, "Switch demo account"), db.users.map(u => /*#__PURE__*/React.createElement("button", {
+  }, "Switch demo account"), db.users.filter(u => !API.mode || /@demo\.io$/.test(u.email)).map(u => /*#__PURE__*/React.createElement("button", {
     key: u.id,
     type: "button",
     onClick: async () => {
@@ -3930,7 +3978,17 @@ function Topbar({
     className: "flex-1 mono truncate"
   }, u.email), u.id === user.id ? /*#__PURE__*/React.createElement("span", {
     className: "text-[10.5px] text-rb-ok"
-  }, "current") : null))), /*#__PURE__*/React.createElement("button", {
+  }, "current") : null))), API.mode ? /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => {
+      setMenu(false);
+      window.dispatchEvent(new Event('rb-open-password'));
+    },
+    className: "mt-2 w-full flex items-center gap-2 px-2 py-2 rounded-lg text-[12.5px] text-rb-dim hover:text-rb-ink hover:bg-white/5 transition-colors"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "key",
+    size: 14
+  }), "Change password") : null, /*#__PURE__*/React.createElement("button", {
     type: "button",
     onClick: onLogout,
     className: "mt-2 w-full flex items-center gap-2 px-2 py-2 rounded-lg text-[12.5px] text-rb-red hover:bg-rb-red/10 transition-colors"
@@ -3952,7 +4010,7 @@ function AppShell({
   const accent = db.session.user.role === 'red' ? '#FF3B4E' : db.session.user.role === 'blue' ? '#2F8CFF' : '#7C5CFF';
   return /*#__PURE__*/React.createElement("div", {
     className: "min-h-screen flex bg-rb-base"
-  }, /*#__PURE__*/React.createElement(Sidebar, {
+  }, API.mode ? /*#__PURE__*/React.createElement(ChangePasswordModal, null) : null, /*#__PURE__*/React.createElement(Sidebar, {
     db: db,
     active: active,
     open: nav,
@@ -5972,6 +6030,177 @@ function Alerts() {
     className: "mt-1 text-rb-dim"
   }, "Detectors evaluate the last few minutes of activity after every run and every login attempt. A burst of runs, a repeated miss chain or repeated denied access raises a High alert; hammering one category or failing logins raises Medium.")));
 }
+const FIELD_CLS = "w-full bg-rb-base border border-rb-line rounded-lg px-3 py-2.5 text-[13.5px] placeholder:text-rb-dim/60 focus:border-rb-blue/60";
+const LABEL_CLS = "block text-[12px] uppercase tracking-[.08em] text-rb-dim font-medium mb-1.5";
+function ChangePasswordModal() {
+  const [open, setOpen] = useState(false);
+  const [cur, setCur] = useState('');
+  const [pw1, setPw1] = useState('');
+  const [pw2, setPw2] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  useEffect(() => {
+    const h = () => {
+      setCur('');
+      setPw1('');
+      setPw2('');
+      setErr('');
+      setOpen(true);
+    };
+    window.addEventListener('rb-open-password', h);
+    return () => window.removeEventListener('rb-open-password', h);
+  }, []);
+  async function submit(e) {
+    e.preventDefault();
+    if (pw1 !== pw2) {
+      setErr('The new passwords do not match.');
+      return;
+    }
+    setBusy(true);
+    setErr('');
+    try {
+      const r = await apiCall('POST', '/api/auth/change-password', {
+        current_password: cur,
+        new_password: pw1
+      });
+      API.token = r.token;
+      toast('Password changed. Other sessions were signed out.', 'ok');
+      setOpen(false);
+    } catch (e2) {
+      setErr(e2.message);
+    }
+    setBusy(false);
+  }
+  const field = (id, label, value, set, auto) => /*#__PURE__*/React.createElement("div", {
+    key: id
+  }, /*#__PURE__*/React.createElement("label", {
+    htmlFor: id,
+    className: LABEL_CLS
+  }, label), /*#__PURE__*/React.createElement("input", {
+    id: id,
+    type: "password",
+    autoComplete: auto,
+    required: true,
+    value: value,
+    onChange: e => set(e.target.value),
+    className: FIELD_CLS
+  }));
+  return ReactDOM.createPortal( /*#__PURE__*/React.createElement(Modal, {
+    open: open,
+    onClose: () => setOpen(false),
+    title: "Change password",
+    sub: "At least 10 characters. Your other sessions will be signed out.",
+    footer: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(Button, {
+      variant: "subtle",
+      onClick: () => setOpen(false)
+    }, "Cancel"), /*#__PURE__*/React.createElement(Button, {
+      variant: "blue",
+      icon: "key",
+      onClick: submit,
+      disabled: busy || !cur || !pw1 || !pw2
+    }, busy ? 'Saving…' : 'Change password'))
+  }, /*#__PURE__*/React.createElement("form", {
+    className: "space-y-4",
+    onSubmit: submit
+  }, field('cp-cur', 'Current password', cur, setCur, 'current-password'), field('cp-new', 'New password', pw1, setPw1, 'new-password'), field('cp-new2', 'Repeat new password', pw2, setPw2, 'new-password'), err ? /*#__PURE__*/React.createElement("div", {
+    role: "alert",
+    className: "rounded-lg border border-rb-red/40 bg-rb-red/10 px-3 py-2.5 text-[12.5px] text-rb-red"
+  }, err) : null, /*#__PURE__*/React.createElement("button", {
+    type: "submit",
+    className: "sr-only"
+  }, "Change password"))), document.body);
+}
+function AddUserCard() {
+  const {
+    db,
+    commit
+  } = useDB();
+  const blank = {
+    name: '',
+    email: '',
+    role: 'red',
+    password: ''
+  };
+  const [f, setF] = useState(blank);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const set = (k, v) => setF(Object.assign({}, f, {
+    [k]: v
+  }));
+  async function submit(e) {
+    e.preventDefault();
+    setBusy(true);
+    setErr('');
+    try {
+      await apiCall('POST', '/api/users', f);
+      await refreshApi(db, commit);
+      toast('Account created for ' + f.email + ' (' + f.role + ')', 'ok');
+      setF(blank);
+    } catch (e2) {
+      setErr(e2.message);
+    }
+    setBusy(false);
+  }
+  const input = (id, label, key, type, extra) => /*#__PURE__*/React.createElement("div", {
+    key: id
+  }, /*#__PURE__*/React.createElement("label", {
+    htmlFor: id,
+    className: LABEL_CLS
+  }, label), /*#__PURE__*/React.createElement("input", Object.assign({
+    id: id,
+    type: type,
+    required: true,
+    value: f[key],
+    onChange: e => set(key, e.target.value),
+    className: FIELD_CLS
+  }, extra)));
+  return /*#__PURE__*/React.createElement(Card, {
+    className: "p-4"
+  }, /*#__PURE__*/React.createElement("h2", {
+    className: "font-display font-semibold text-[15px] mb-3"
+  }, "Add a user"), /*#__PURE__*/React.createElement("form", {
+    onSubmit: submit
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "grid sm:grid-cols-2 lg:grid-cols-4 gap-3"
+  }, input('au-name', 'Name', 'name', 'text', {
+    maxLength: 80,
+    autoComplete: 'off'
+  }), input('au-email', 'Email', 'email', 'email', {
+    autoComplete: 'off'
+  }), /*#__PURE__*/React.createElement("div", {
+    key: "role"
+  }, /*#__PURE__*/React.createElement("label", {
+    htmlFor: "au-role",
+    className: LABEL_CLS
+  }, "Role"), /*#__PURE__*/React.createElement("select", {
+    id: "au-role",
+    value: f.role,
+    onChange: e => set('role', e.target.value),
+    className: FIELD_CLS
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "red"
+  }, "Red Team"), /*#__PURE__*/React.createElement("option", {
+    value: "blue"
+  }, "Blue Team"), /*#__PURE__*/React.createElement("option", {
+    value: "admin"
+  }, "Admin / Auditor"))), input('au-pw', 'Temporary password', 'password', 'password', {
+    minLength: 10,
+    autoComplete: 'new-password',
+    placeholder: 'At least 10 characters'
+  })), err ? /*#__PURE__*/React.createElement("div", {
+    role: "alert",
+    className: "mt-3 rounded-lg border border-rb-red/40 bg-rb-red/10 px-3 py-2.5 text-[12.5px] text-rb-red"
+  }, err) : null, /*#__PURE__*/React.createElement("div", {
+    className: "mt-3 flex items-center gap-3"
+  }, /*#__PURE__*/React.createElement(Button, {
+    variant: "blue",
+    icon: "check",
+    type: "submit",
+    disabled: busy
+  }, busy ? 'Creating…' : 'Create account'), /*#__PURE__*/React.createElement("span", {
+    className: "text-[11.5px] text-rb-dim"
+  }, "Share the temporary password privately; the user can change it from the account menu."))));
+}
 function Admin() {
   const {
     db,
@@ -6039,7 +6268,7 @@ function Admin() {
       tone: "glow",
       icon: "shield"
     }, "Admin / Auditor")
-  }), /*#__PURE__*/React.createElement(Card, {
+  }), API.mode ? /*#__PURE__*/React.createElement(AddUserCard, null) : null, /*#__PURE__*/React.createElement(Card, {
     className: "p-4"
   }, /*#__PURE__*/React.createElement("h2", {
     className: "font-display font-semibold text-[15px] mb-3"

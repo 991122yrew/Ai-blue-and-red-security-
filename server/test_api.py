@@ -251,6 +251,126 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(self.call("GET", "/api/audit/verify?simulate_tamper=EVT-9999", token=blue)[0], 404)
         self.assertEqual(self.call("GET", "/api/audit/verify?simulate_tamper=auto", token=red)[0], 403)
 
+    # ---- real accounts ----
+    GOOD = "correct horse battery"
+
+    def register(self, email="new@user.io", name="New User", password=GOOD):
+        return self.call("POST", "/api/auth/register", {"email": email, "name": name, "password": password})
+
+    def login_as(self, email, password):
+        return self.call("POST", "/api/auth/login", {"email": email, "password": password})
+
+    def test_signup_creates_least_privilege_account(self):
+        status, d = self.register()
+        self.assertEqual((status, d["user"]["role"]), (201, "red"))
+        self.assertNotIn("password", json.dumps(d))
+        status, d = self.login_as("new@user.io", self.GOOD)
+        self.assertEqual((status, d["user"]["role"]), (200, "red"))
+        self.assertEqual(self.call("GET", "/api/rules", token=d["token"])[0], 403)
+
+    def test_signup_validation_and_duplicates(self):
+        self.assertEqual(self.register(password="short")[0], 400)
+        self.assertEqual(self.register(password="aaaaaaaaaaaa")[0], 400)
+        self.assertEqual(self.register(email="not-an-email")[0], 400)
+        self.assertEqual(self.register(name="")[0], 400)
+        self.assertEqual(self.register()[0], 201)
+        self.assertEqual(self.register(email="NEW@user.io")[0], 409)
+        self.assertEqual(self.register(email="red@demo.io")[0], 409)
+
+    def test_signup_rate_limit_and_switch(self):
+        old, app.SIGNUPS_PER_HOUR = app.SIGNUPS_PER_HOUR, 2
+        try:
+            codes = [self.register(email="u%d@user.io" % i)[0] for i in range(3)]
+        finally:
+            app.SIGNUPS_PER_HOUR = old
+        self.assertEqual(codes, [201, 201, 429])
+        os.environ["ALLOW_SIGNUP"] = "0"
+        try:
+            self.assertEqual(self.register(email="late@user.io")[0], 403)
+            self.assertFalse(self.call("GET", "/api/health")[1]["signup"])
+        finally:
+            del os.environ["ALLOW_SIGNUP"]
+        self.assertTrue(self.call("GET", "/api/health")[1]["signup"])
+        self.assertTrue(self.call("GET", "/api/health")[1]["demo"])
+
+    def test_change_password_flow(self):
+        self.register()
+        old = self.login_as("new@user.io", self.GOOD)[1]["token"]
+        blue = self.login("blue")
+        body = {"current_password": "wrong password!", "new_password": "a brand new passphrase"}
+        self.assertEqual(self.call("POST", "/api/auth/change-password", body, token=old)[0], 400)
+        body["current_password"] = self.GOOD
+        self.assertEqual(self.call("POST", "/api/auth/change-password", dict(body, new_password="short"), token=old)[0], 400)
+        self.assertEqual(self.call("POST", "/api/auth/change-password", dict(body, new_password=self.GOOD), token=old)[0], 400)
+        status, d = self.call("POST", "/api/auth/change-password", body, token=old)
+        self.assertEqual(status, 200)
+        self.assertEqual(self.call("GET", "/api/me", token=old)[0], 401)          # other sessions are signed out
+        self.assertEqual(self.call("GET", "/api/me", token=d["token"])[0], 200)    # the fresh token works
+        self.assertEqual(self.login_as("new@user.io", self.GOOD)[0], 401)
+        self.assertEqual(self.login_as("new@user.io", "a brand new passphrase")[0], 200)
+        actions = self.audit_actions(blue)
+        self.assertTrue({"PASSWORD_CHANGED", "PASSWORD_CHANGE_FAILED", "USER_REGISTERED"} <= set(actions))
+
+    def test_change_password_lockout(self):
+        self.register()
+        t = self.login_as("new@user.io", self.GOOD)[1]["token"]
+        bad = {"current_password": "nope nope nope", "new_password": "another good passphrase"}
+        codes = [self.call("POST", "/api/auth/change-password", bad, token=t)[0] for _ in range(6)]
+        self.assertEqual(codes, [400] * 5 + [429])
+
+    def test_admin_creates_users(self):
+        admin, red = self.login("admin"), self.login("red")
+        new = {"email": "analyst@corp.io", "name": "Ana Lyst", "role": "blue", "password": self.GOOD}
+        self.assertEqual(self.call("POST", "/api/users", new, token=red)[0], 403)
+        status, d = self.call("POST", "/api/users", new, token=admin)
+        self.assertEqual((status, d["user"]["role"]), (201, "blue"))
+        self.assertEqual(self.call("POST", "/api/users", new, token=admin)[0], 409)
+        self.assertEqual(self.call("POST", "/api/users", dict(new, email="x@corp.io", role="root"), token=admin)[0], 400)
+        self.assertEqual(self.login_as("analyst@corp.io", self.GOOD)[1]["user"]["role"], "blue")
+        self.assertIn("USER_CREATED", self.audit_actions(admin))
+
+    def test_bootstrap_admin_without_demo_accounts(self):
+        path = os.path.join(self.tmp.name, "boot.db")
+        store = app.Store(path, "s", None, ("Boss@Corp.io", self.GOOD))
+        try:
+            self.assertFalse(store.demo)
+            self.assertEqual(store.login("boss@corp.io", self.GOOD, "")["role"], "admin")
+            self.assertEqual(store.db.execute("SELECT COUNT(*) FROM users").fetchone()[0], 1)
+        finally:
+            store.db.close()
+
+    def test_old_database_is_migrated(self):
+        path = os.path.join(self.tmp.name, "old.db")
+        db = sqlite3.connect(path)
+        db.executescript("CREATE TABLE users(id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, name TEXT, title TEXT,"
+                         " role TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, pw_salt TEXT NOT NULL,"
+                         " pw_hash TEXT NOT NULL, created_at TEXT NOT NULL);")
+        db.commit()
+        db.close()
+        store = app.Store(path, "s", "demo1234")
+        try:
+            cols = [r["name"] for r in store.db.execute("PRAGMA table_info(users)")]
+            self.assertIn("pw_changed_at", cols)
+            self.assertEqual(store.login("red@demo.io", "demo1234", "")["role"], "red")
+        finally:
+            store.db.close()
+
+    def test_proxy_header_sets_client_ip_only_when_trusted(self):
+        def login_ip(header):
+            req = urllib.request.Request(self.base + "/api/auth/login", method="POST",
+                                         data=json.dumps({"email": "red@demo.io", "password": PW}).encode(),
+                                         headers={"Content-Type": "application/json", "X-Forwarded-For": header})
+            urllib.request.urlopen(req).read()
+            blue = self.login("blue")
+            return next(e["ip"] for e in self.call("GET", "/api/audit", token=blue)[1]["items"]
+                        if e["action"] == "LOGIN_SUCCESS" and e["actor_id"] == "red@demo.io")
+        self.assertEqual(login_ip("203.0.113.7, 10.0.0.1"), "127.0.0.1")
+        os.environ["TRUST_PROXY"] = "1"
+        try:
+            self.assertEqual(login_ip("203.0.113.7, 10.0.0.1"), "203.0.113.7")
+        finally:
+            del os.environ["TRUST_PROXY"]
+
     def test_csv_formula_injection_neutralised(self):
         self.assertEqual(app.csv_safe("=1+1"), "'=1+1")
         self.assertEqual(app.csv_safe("ok"), "ok")

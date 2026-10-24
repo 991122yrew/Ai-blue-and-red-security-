@@ -11,5 +11,15 @@ services:
         value: https://991122yrew.github.io
       - key: HOST
         value: 0.0.0.0
+      - key: TRUST_PROXY
+        value: "1"
+      # Public demo accounts (red@demo.io, blue@demo.io, admin@demo.io, password demo1234).
+      # Set to "0" once real users exist, and set ADMIN_EMAIL / ADMIN_PASSWORD below.
       - key: SEED_DEMO
         value: "1"
+      # Optional first administrator, created on startup if the email does not exist yet.
+      # sync: false means Render asks you for the value instead of reading it from this file.
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false

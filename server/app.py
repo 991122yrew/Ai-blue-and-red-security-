@@ -35,6 +35,9 @@ ROLES = ("red", "blue", "admin")
 SESSION_TTL_MIN = 10
 MAX_BODY = 64 * 1024
 RUN_LIMIT_PER_MIN = int(os.environ.get("RUN_LIMIT_PER_MIN", "30"))   # test runs per user per minute
+PASSWORD_MIN = 10
+SIGNUPS_PER_HOUR = int(os.environ.get("SIGNUPS_PER_HOUR", "5"))      # self-service sign-ups per IP
+EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,190}\.[^@\s]{2,}$")
 LOGIN_LIMIT = 5          # failed logins per email in the window before lockout
 LOGIN_WINDOW_MIN = 5
 
@@ -77,7 +80,8 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS users(
   id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, name TEXT, title TEXT,
   role TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1,
-  pw_salt TEXT NOT NULL, pw_hash TEXT NOT NULL, created_at TEXT NOT NULL);
+  pw_salt TEXT NOT NULL, pw_hash TEXT NOT NULL, created_at TEXT NOT NULL,
+  pw_changed_at INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS rules(
   id TEXT PRIMARY KEY, name TEXT NOT NULL, pattern_type TEXT NOT NULL, pattern TEXT NOT NULL,
   action TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, note TEXT, created_by TEXT, created_at TEXT);
@@ -100,17 +104,21 @@ CREATE TRIGGER IF NOT EXISTS audit_no_delete BEFORE DELETE ON audit
 
 
 class Store:
-    def __init__(self, db_path, secret, demo_password=None):
+    def __init__(self, db_path, secret, demo_password=None, admin=None):
         self.lock = threading.RLock()
+        self.demo = bool(demo_password)
         self.db = sqlite3.connect(str(db_path), check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.secret = secret.encode() if isinstance(secret, str) else secret
         with self.lock:
             self.db.executescript(SCHEMA)
-            self._seed(demo_password)
+            cols = [r["name"] for r in self.db.execute("PRAGMA table_info(users)")]
+            if "pw_changed_at" not in cols:      # databases created before password changes existed
+                self.db.execute("ALTER TABLE users ADD COLUMN pw_changed_at INTEGER NOT NULL DEFAULT 0")
+            self._seed(demo_password, admin)
 
     # ---- seeding ---------------------------------------------------------
-    def _seed(self, demo_password):
+    def _seed(self, demo_password, admin=None):
         if self.db.execute("SELECT COUNT(*) FROM rules").fetchone()[0] == 0:
             for r in json.loads((DATA_DIR / "rules.json").read_text(encoding="utf-8")):
                 self.db.execute(
@@ -124,13 +132,21 @@ class Store:
                 ("usr_admin", "admin@demo.io", "A. Auditor", "admin", "Admin / Auditor"),
             ]:
                 salt, digest = hash_password(demo_password)
-                self.db.execute("INSERT INTO users VALUES(?,?,?,?,?,1,?,?,?)",
+                self.db.execute("INSERT INTO users(id,email,name,title,role,active,pw_salt,pw_hash,created_at)"
+                                " VALUES(?,?,?,?,?,1,?,?,?)",
                                 (uid, email, name, title, role, salt, digest, iso(now())))
+        if admin and not self.db.execute("SELECT 1 FROM users WHERE email=?", (admin[0].lower(),)).fetchone():
+            salt, digest = hash_password(admin[1])
+            self.db.execute("INSERT INTO users(id,email,name,title,role,active,pw_salt,pw_hash,created_at)"
+                            " VALUES(?,?,?,?,?,1,?,?,?)",
+                            ("usr_" + secrets.token_hex(4), admin[0].lower(), "Administrator", "Admin / Auditor",
+                             "admin", salt, digest, iso(now())))
         self.db.commit()
 
     # ---- tokens ----------------------------------------------------------
     def make_token(self, user, ttl_min):
-        payload = b64(json.dumps({"sub": user["id"], "exp": int(time.time()) + ttl_min * 60}).encode())
+        payload = b64(json.dumps({"sub": user["id"], "iat": int(time.time() * 1000),
+                                  "exp": int(time.time()) + ttl_min * 60}).encode())
         sig = b64(hmac.new(self.secret, payload.encode(), hashlib.sha256).digest())
         return payload + "." + sig
 
@@ -144,7 +160,9 @@ class Store:
             if data["exp"] < time.time():
                 return None
             row = self.db.execute("SELECT * FROM users WHERE id=? AND active=1", (data["sub"],)).fetchone()
-            return dict(row) if row else None
+            if not row or data.get("iat", 0) < row["pw_changed_at"]:   # password changed since this token was issued
+                return None
+            return dict(row)
         except Exception:
             return None
 
@@ -264,6 +282,56 @@ class Store:
             user = dict(row)
             self.audit(email, user["role"], "LOGIN_SUCCESS", "/api/auth/login", "OK", ip=ip)
             return user
+
+    # ---- accounts --------------------------------------------------------
+    @staticmethod
+    def validate_password(password, email=""):
+        if not isinstance(password, str) or not PASSWORD_MIN <= len(password) <= 200:
+            raise ApiError(400, "Password must be %d-200 characters." % PASSWORD_MIN)
+        if password.lower() == email.lower() or len(set(password)) < 4:
+            raise ApiError(400, "Choose a password that is harder to guess.")
+
+    def create_user(self, email, name, role, password, actor, actor_role, action, ip):
+        email = (email or "").strip().lower()
+        name = (name or "").strip()
+        if not EMAIL_RE.match(email) or len(email) > 254:
+            raise ApiError(400, "Enter a valid email address.")
+        if not 1 <= len(name) <= 80:
+            raise ApiError(400, "Name must be 1-80 characters.")
+        if role not in ROLES:
+            raise ApiError(400, "role must be red, blue or admin")
+        self.validate_password(password, email)
+        with self.lock:
+            if self.db.execute("SELECT 1 FROM users WHERE email=?", (email,)).fetchone():
+                raise ApiError(409, "An account with that email already exists.")
+            uid = "usr_" + secrets.token_hex(4)
+            salt, digest = hash_password(password)
+            titles = {"red": "Red Team Operator", "blue": "Blue Team Analyst", "admin": "Admin / Auditor"}
+            self.db.execute("INSERT INTO users(id,email,name,title,role,active,pw_salt,pw_hash,created_at)"
+                            " VALUES(?,?,?,?,?,1,?,?,?)", (uid, email, name, titles[role], role, salt, digest, iso(now())))
+            self.db.commit()
+            self.audit(actor or email, actor_role, action, "/api/v1/admin/users/" + uid, "OK", ip=ip)
+        return {"id": uid, "email": email, "name": name, "role": role, "title": titles[role]}
+
+    def change_password(self, user, current, new, ip):
+        with self.lock:
+            cutoff = iso(now() - timedelta(minutes=LOGIN_WINDOW_MIN))
+            if self._count("SELECT COUNT(*) FROM audit WHERE actor_id=? AND action='PASSWORD_CHANGE_FAILED' AND ts_utc>=?",
+                           (user["email"], cutoff)) >= LOGIN_LIMIT:
+                raise ApiError(429, "Too many failed attempts. Try again in a few minutes.")
+            row = self.db.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone()
+            if not check_password(current or "", row["pw_salt"], row["pw_hash"]):
+                self.audit(user["email"], user["role"], "PASSWORD_CHANGE_FAILED", "/api/auth/change-password", "FAIL", ip=ip)
+                raise ApiError(400, "Current password is incorrect.")
+            self.validate_password(new, user["email"])
+            if new == current:
+                raise ApiError(400, "Choose a password different from the current one.")
+            salt, digest = hash_password(new)
+            self.db.execute("UPDATE users SET pw_salt=?, pw_hash=?, pw_changed_at=? WHERE id=?",
+                            (salt, digest, int(time.time() * 1000), user["id"]))
+            self.db.commit()
+            self.audit(user["email"], user["role"], "PASSWORD_CHANGED", "/api/auth/change-password", "OK", ip=ip)
+            return dict(self.db.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone())
 
     # ---- domain ----------------------------------------------------------
     def tests(self):
@@ -436,6 +504,11 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def ip(self):
+        # behind a reverse proxy (Render) the real client is the first X-Forwarded-For entry
+        if os.environ.get("TRUST_PROXY") == "1":
+            fwd = self.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+            if fwd:
+                return fwd[:45]
         return self.client_address[0]
 
     def body(self):
@@ -510,7 +583,19 @@ class Handler(BaseHTTPRequestHandler):
     def api(self, method, path, q):
         s = self.store
         if (method, path) == ("GET", "/api/health"):
-            return self.send_json(200, {"status": "ok", "audit_entries": s._count("SELECT COUNT(*) FROM audit", ())})
+            return self.send_json(200, {"status": "ok", "audit_entries": s._count("SELECT COUNT(*) FROM audit", ()),
+                                        "signup": os.environ.get("ALLOW_SIGNUP", "1") == "1", "demo": s.demo})
+        if (method, path) == ("POST", "/api/auth/register"):
+            if os.environ.get("ALLOW_SIGNUP", "1") != "1":
+                raise ApiError(403, "Self-service sign-up is turned off.")
+            ip = self.ip()
+            cutoff = iso(now() - timedelta(hours=1))
+            if s._count("SELECT COUNT(*) FROM audit WHERE action='USER_REGISTERED' AND ip=? AND ts_utc>=?",
+                        (ip, cutoff)) >= SIGNUPS_PER_HOUR:
+                raise ApiError(429, "Too many sign-ups from this address. Try again later.")
+            b = self.body()
+            new = s.create_user(b.get("email"), b.get("name"), "red", b.get("password"), None, "red", "USER_REGISTERED", ip)
+            return self.send_json(201, {"user": new})
         if (method, path) == ("POST", "/api/auth/login"):
             b = self.body()
             user = s.login(b.get("email"), b.get("password"), self.ip())
@@ -520,6 +605,10 @@ class Handler(BaseHTTPRequestHandler):
 
         user = self.authed()
         res = path
+        if (method, path) == ("POST", "/api/auth/change-password"):
+            b = self.body()
+            updated = s.change_password(user, b.get("current_password"), b.get("new_password"), self.ip())
+            return self.send_json(200, {"token": s.make_token(updated, int(os.environ.get("TOKEN_TTL_MIN", "60")))})
         if (method, path) == ("GET", "/api/me"):
             return self.send_json(200, {k: user[k] for k in ("id", "email", "name", "role", "title")})
 
@@ -638,6 +727,13 @@ class Handler(BaseHTTPRequestHandler):
                 s.audit(user["email"], user["role"], "SESSION_LOCKED", path, "OK", ip=self.ip())
             return self.send_json(200, {"id": m.group(1), "locked": True})
 
+        if (method, path) == ("POST", "/api/users"):
+            self.require(user, "admin", resource=res)
+            b = self.body()
+            new = s.create_user(b.get("email"), b.get("name"), b.get("role"), b.get("password"),
+                                user["email"], user["role"], "USER_CREATED", self.ip())
+            return self.send_json(201, {"user": new})
+
         if (method, path) == ("GET", "/api/users"):
             self.require(user, "admin", resource=res)
             rows = s.db.execute("SELECT id,email,name,title,role,active,created_at FROM users").fetchall()
@@ -679,8 +775,8 @@ def load_secret():
     return f.read_text().strip()
 
 
-def make_server(host, port, db_path, secret, demo_password="demo1234"):
-    Handler.store = Store(db_path, secret, demo_password)
+def make_server(host, port, db_path, secret, demo_password="demo1234", admin=None):
+    Handler.store = Store(db_path, secret, demo_password, admin)
     Handler.cors_origin = os.environ.get("CORS_ORIGIN", "*")
     return ThreadingHTTPServer((host, port), Handler)
 
@@ -690,7 +786,11 @@ def main():
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8000"))
     db_path = os.environ.get("DB_PATH", str(DATA_DIR / "sentinel.db"))
-    srv = make_server(host, port, db_path, load_secret(), demo)
+    admin = None
+    if os.environ.get("ADMIN_EMAIL") and os.environ.get("ADMIN_PASSWORD"):
+        Store.validate_password(os.environ["ADMIN_PASSWORD"], os.environ["ADMIN_EMAIL"])
+        admin = (os.environ["ADMIN_EMAIL"], os.environ["ADMIN_PASSWORD"])
+    srv = make_server(host, port, db_path, load_secret(), demo, admin)
     print("RedBlue Sentinel API on http://%s:%d  (db: %s)" % (host, port, db_path))
     try:
         srv.serve_forever()
