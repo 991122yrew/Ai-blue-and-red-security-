@@ -34,6 +34,7 @@ GENESIS = "0" * 64
 ROLES = ("red", "blue", "admin")
 SESSION_TTL_MIN = 10
 MAX_BODY = 64 * 1024
+RUN_LIMIT_PER_MIN = int(os.environ.get("RUN_LIMIT_PER_MIN", "30"))   # test runs per user per minute
 LOGIN_LIMIT = 5          # failed logins per email in the window before lockout
 LOGIN_WINDOW_MIN = 5
 
@@ -170,16 +171,27 @@ class Store:
             self.db.commit()
             return {**e, "prev_hash": prev, "hash": h}
 
-    def verify_chain(self):
+    def verify_chain(self, simulate_tamper=None):
+        """Recompute the chain. With simulate_tamper (an entry id, or "auto" for a middle entry)
+        one entry is altered in a throwaway copy first, so the log itself is never touched."""
         with self.lock:
-            rows = self.db.execute("SELECT * FROM audit ORDER BY seq").fetchall()
+            rows = [dict(r) for r in self.db.execute("SELECT * FROM audit ORDER BY seq").fetchall()]
+        tampered = None
+        if simulate_tamper and rows:
+            target = rows[len(rows) // 2] if simulate_tamper == "auto" else next(
+                (r for r in rows if r["id"] == simulate_tamper), None)
+            if target is None:
+                raise ApiError(404, "Unknown audit entry.")
+            target["result"] = "TAMPERED"
+            tampered = target["id"]
         prev = GENESIS
-        for r in rows:
-            e = dict(r)
+        for e in rows:
             if e["prev_hash"] != prev or self._entry_hash(prev, e) != e["hash"]:
-                return {"valid": False, "checked": len(rows), "broken_at": e["id"], "head": prev}
+                return {"valid": False, "checked": len(rows), "broken_at": e["id"], "head": prev,
+                        "simulated": bool(tampered), "tampered": tampered}
             prev = e["hash"]
-        return {"valid": True, "checked": len(rows), "broken_at": None, "head": prev}
+        return {"valid": True, "checked": len(rows), "broken_at": None, "head": prev,
+                "simulated": False, "tampered": None}
 
     # ---- anomaly detection ----------------------------------------------
     def _count(self, sql, args):
@@ -265,6 +277,11 @@ class Store:
         if not test:
             raise ApiError(404, "Unknown test case.")
         with self.lock:
+            recent = self._count("SELECT COUNT(*) FROM runs WHERE user_id=? AND ts_utc>=?",
+                                 (user["id"], iso(now() - timedelta(seconds=60))))
+            if recent >= RUN_LIMIT_PER_MIN:
+                self.audit(user["email"], user["role"], "RATE_LIMITED", "/api/runs", "DENIED", ip=ip)
+                raise ApiError(429, "Rate limit: at most %d test runs per minute. Slow down." % RUN_LIMIT_PER_MIN)
             res = analyzer.analyze(test, self.rules())
             risk = analyzer.risk_score(test, res["decision"])
             n = self._count("SELECT COUNT(*) FROM runs", ()) + 1
@@ -471,7 +488,8 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError(404, "Not found.")
         f = STATIC_ROOT / pages[path]
         raw = f.read_bytes()
-        self._headers(200, "text/html; charset=utf-8", len(raw))
+        ctype = "application/javascript; charset=utf-8" if f.suffix == ".js" else "text/html; charset=utf-8"
+        self._headers(200, ctype, len(raw))
         self.wfile.write(raw)
 
     # ---- auth helpers ----------------------------------------------------
@@ -579,7 +597,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(200, page)
         if (method, path) == ("GET", "/api/audit/verify"):
             self.require(user, "blue", "admin", resource=res)
-            return self.send_json(200, s.verify_chain())
+            return self.send_json(200, s.verify_chain(q.get("simulate_tamper", [None])[0]))
         if (method, path) == ("GET", "/api/audit/export.csv"):
             self.require(user, "admin", resource=res)
             rows = s.audit_page(user, {"limit": ["500"]})["items"]

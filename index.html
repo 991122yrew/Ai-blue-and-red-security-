@@ -707,7 +707,8 @@ const ACTION_LABEL = {
   SESSION_LOCKED: 'Session locked',
   LOG_EXPORT: 'Audit export',
   ALERT_RAISED: 'Anomaly raised',
-  USER_STATUS: 'User status changed'
+  USER_STATUS: 'User status changed',
+  RATE_LIMITED: 'Rate limited'
 };
 const RISK_FORMULA = 'score = severity(1–5) + outcome(MISSED +2 · FLAGGED +1 · BLOCKED −1) + category impact';
 const RISK_BANDS = 'Low ≤ 3 · Medium 4–5 · High ≥ 6';
@@ -1378,19 +1379,25 @@ const API = {
   token: null
 };
 async function detectApi() {
-  try {
-    const q = new URLSearchParams(location.search).get('api');
-    const base = (q || window.RB_API_URL || (location.protocol.indexOf('http') === 0 ? location.origin : '')).replace(/\/$/, '');
-    if (!base) return;
-    const r = await fetch(base + '/api/health', {
-      cache: 'no-store'
-    });
-    const j = await r.json();
-    if (j && j.status === 'ok') {
-      API.base = base;
-      API.mode = true;
-    }
-  } catch (e) {}
+  /* order: ?api= override, the origin serving this page (server/app.py), then config.js */
+  const candidates = [new URLSearchParams(location.search).get('api'), location.protocol.indexOf('http') === 0 ? location.origin : '', window.RB_API_URL];
+  const seen = {};
+  for (let i = 0; i < candidates.length; i++) {
+    const base = String(candidates[i] || '').replace(/\/$/, '');
+    if (!base || seen[base]) continue;
+    seen[base] = 1;
+    try {
+      const r = await fetch(base + '/api/health', {
+        cache: 'no-store'
+      });
+      const j = await r.json();
+      if (j && j.status === 'ok') {
+        API.base = base;
+        API.mode = true;
+        return;
+      }
+    } catch (e) {}
+  }
 }
 async function apiCall(method, path, body) {
   const headers = {
@@ -3243,8 +3250,43 @@ function Landing() {
 function Login() {
   const {
     db,
-    login
+    login,
+    commit
   } = useDB();
+  async function guided() {
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    setBusy(true);
+    setErr('');
+    try {
+      toast('Guided demo 1/4 — signing in as the Red Team operator', 'info');
+      let r = await login('red@demo.io', DEMO_PW);
+      if (!r.ok) throw new Error(r.message);
+      go('/app/red');
+      await sleep(1600);
+      toast('Guided demo 2/4 — running attacks in isolated sessions', 'info');
+      const seen = {};
+      const tests = db.tests.slice();
+      for (let i = 0; i < tests.length && i < 7 && Object.keys(seen).length < 3; i++) {
+        const run = await runTest(db, commit, tests[i], r.user);
+        seen[run.decision] = 1;
+        toast(tests[i].id + ' → ' + run.decision, run.decision === 'BLOCKED' ? 'ok' : run.decision === 'FLAGGED' ? 'warn' : 'danger');
+        await sleep(1300);
+      }
+      toast('Guided demo 3/4 — switching to the Blue Team analyst', 'info');
+      go('/');
+      await sleep(400);
+      r = await login('blue@demo.io', DEMO_PW);
+      if (!r.ok) throw new Error(r.message);
+      go('/app/blue');
+      await sleep(2600);
+      go('/app/audit');
+      await sleep(1600);
+      toast('Guided demo 4/4 — now try “Verify integrity” and “Simulate tampering”', 'ok');
+    } catch (e) {
+      setErr(e.message || 'Guided demo failed');
+    }
+    setBusy(false);
+  }
   const [email, setEmail] = useState('');
   const [pw, setPw] = useState('');
   const [busy, setBusy] = useState(false);
@@ -3367,6 +3409,14 @@ function Login() {
   }, "Password for all three is ", /*#__PURE__*/React.createElement("code", {
     className: "mono text-rb-ink"
   }, DEMO_PW), "."), /*#__PURE__*/React.createElement("div", {
+    className: "mt-3"
+  }, /*#__PURE__*/React.createElement(Button, {
+    variant: "primary",
+    full: true,
+    icon: "play",
+    onClick: guided,
+    disabled: busy
+  }, "Run the 2-minute guided demo")), /*#__PURE__*/React.createElement("div", {
     className: "mt-4 space-y-2.5"
   }, db.users.map(u => {
     const t = TONE[ROLE_TONE[u.role]];
@@ -4621,6 +4671,47 @@ function BluePanel() {
     commit();
     toast('Rule ' + r.id + ' ' + (r.enabled ? 'enabled' : 'disabled'), r.enabled ? 'ok' : 'info');
   }
+  async function suggestRule(run, test) {
+    const phrase = test.suggest;
+    if (db.rules.some(r => String(r.pattern).toLowerCase() === String(phrase).toLowerCase())) {
+      toast('A rule for “' + phrase + '” already exists — re-run ' + test.id + ' to confirm', 'info');
+      return;
+    }
+    const body = {
+      name: 'Block: ' + phrase,
+      pattern_type: 'keyword',
+      pattern: phrase,
+      action: 'BLOCK',
+      enabled: true,
+      note: 'Suggested from missed run ' + run.id
+    };
+    try {
+      if (API.mode) {
+        await apiCall('POST', '/api/rules', body);
+        await refreshApi(db, commit);
+      } else {
+        const next = db.rules.reduce((m, x) => Math.max(m, parseInt(String(x.id).replace('RULE-', ''), 10) || 0), 0) + 1;
+        const rec = Object.assign({}, body, {
+          id: 'RULE-' + pad(next, 3),
+          created_by: db.session.user.email,
+          created_at: iso(Date.now()),
+          updated_at: iso(Date.now())
+        });
+        db.rules.push(rec);
+        await appendAudit(db, {
+          actor_id: db.session.user.email,
+          role: db.session.user.role,
+          action: 'RULE_CREATED',
+          resource: '/api/v1/rules/' + rec.id,
+          result: 'OK'
+        });
+        commit();
+      }
+      toast('Rule created: block “' + phrase + '”. Re-run ' + test.id + ' as Red to confirm it is now caught.', 'ok');
+    } catch (e) {
+      toast(e.message, 'danger');
+    }
+  }
   const sel = drawer ? db.runs.filter(x => x.id === drawer)[0] : null;
   const selRule = sel && sel.matched_rule_id ? db.rules.filter(r => r.id === sel.matched_rule_id)[0] : null;
   const selTest = sel ? db.tests.filter(t => t.id === sel.test_id)[0] : null;
@@ -4964,7 +5055,13 @@ function BluePanel() {
   }, recommend(selTest || {
     id: sel.test_id,
     suggest: 'pattern'
-  }, sel.decision)))) : null), /*#__PURE__*/React.createElement(RuleModal, {
+  }, sel.decision)), sel.decision === 'MISSED' && selTest && selTest.suggest ? /*#__PURE__*/React.createElement("div", {
+    className: "mt-3"
+  }, /*#__PURE__*/React.createElement(Button, {
+    variant: "blue",
+    icon: "check",
+    onClick: () => suggestRule(sel, selTest)
+  }, "Create suggested rule")) : null)) : null), /*#__PURE__*/React.createElement(RuleModal, {
     open: !!modal,
     rule: modal && modal.rule,
     onClose: () => setModal(null)
@@ -4986,6 +5083,16 @@ function Dashboard() {
   const alerts = own ? [] : db.alerts.slice().sort((a, b) => w[a.severity] - w[b.severity] || new Date(b.ts) - new Date(a.ts)).slice(0, 5);
   const recentAudit = (own ? db.audit.filter(e => e.actor_id === user.email) : db.audit).slice(-6).reverse();
   const cov = coverage(db);
+  function downloadReport() {
+    const safe = v => {
+      const s = v == null ? '' : String(v);
+      return '"' + (/^[=+\-@]/.test(s) ? "'" + s : s).replace(/"/g, '""') + '"';
+    };
+    const head = [['RedBlue Sentinel report', iso(Date.now())], ['Total runs', m.total], ['Blocked', m.blocked], ['Flagged', m.flagged], ['Missed', m.missed], ['Detection rate %', m.rate], ['Average latency ms', m.avgLatency], ['Open alerts', m.openAlerts], [], ['run_id', 'time_utc', 'actor', 'test_id', 'category', 'decision', 'risk_score', 'risk_label']];
+    const rows = db.runs.slice().reverse().map(r => [r.id, r.ts, r.user_email, r.test_id, r.category, r.decision, r.risk_score, r.risk_label]);
+    downloadText('redblue-sentinel-report-' + iso(Date.now()).slice(0, 10) + '.csv', head.concat(rows).map(r => r.map(safe).join(',')).join('\n'));
+    toast('Report downloaded (' + rows.length + ' runs)', 'ok');
+  }
   return /*#__PURE__*/React.createElement("div", {
     className: "space-y-5"
   }, /*#__PURE__*/React.createElement(SectionTitle, {
@@ -5003,7 +5110,12 @@ function Dashboard() {
     }), /*#__PURE__*/React.createElement(Chip, {
       tone: "muted",
       icon: "clock"
-    }, "Window: last 24h"))
+    }, "Window: last 24h"), own ? null : /*#__PURE__*/React.createElement(Button, {
+      variant: "ghost",
+      icon: "download",
+      onClick: downloadReport,
+      title: "Download a CSV summary of the program and every run"
+    }, "Report"))
   }), own ? /*#__PURE__*/React.createElement(LockBanner, {
     title: "Aggregate metrics are limited for your role",
     tone: "warn",
@@ -5281,6 +5393,37 @@ function AuditLog() {
     }).then(commit);
     toast('Exported ' + rows.length + ' entries to CSV', 'ok');
   }
+  async function simTamper() {
+    setVerifying(true);
+    try {
+      let r;
+      if (API.mode) {
+        const s = await apiCall('GET', '/api/audit/verify?simulate_tamper=auto');
+        r = {
+          valid: s.valid,
+          broken_at: s.broken_at,
+          checked: s.checked,
+          head: s.head,
+          simulated: true,
+          tampered: s.tampered
+        };
+      } else {
+        const copy = db.audit.map(e => Object.assign({}, e));
+        const mid = copy[Math.floor(copy.length / 2)];
+        mid.result = 'TAMPERED';
+        r = await verifyChain({
+          audit: copy
+        });
+        r.simulated = true;
+        r.tampered = mid.id;
+      }
+      setVer(r);
+      toast('Simulated edit of ' + r.tampered + (r.valid ? ' was NOT detected' : ' detected — chain breaks at ' + r.broken_at), r.valid ? 'danger' : 'ok');
+    } catch (e) {
+      toast(e.message, 'danger');
+    }
+    setVerifying(false);
+  }
   async function doVerify() {
     setVerifying(true);
     const r = await verifyChain(db);
@@ -5322,18 +5465,26 @@ function AuditLog() {
     className: "flex items-center gap-2"
   }, /*#__PURE__*/React.createElement("span", {
     className: "font-display font-semibold text-[15px]"
-  }, ver ? ver.valid ? 'Chain verified' : 'Chain broken' : 'Verifying chain…'), ver && ver.valid ? /*#__PURE__*/React.createElement(Chip, {
+  }, ver ? ver.valid ? 'Chain verified' : ver.simulated ? 'Tampering detected (simulation)' : 'Chain broken' : 'Verifying chain…'), ver && ver.valid ? /*#__PURE__*/React.createElement(Chip, {
     tone: "ok",
     icon: "check",
     dot: "pulse"
   }, "Hash chain intact") : null), /*#__PURE__*/React.createElement("div", {
     className: "mono text-[11px] text-rb-dim mt-0.5"
-  }, ver ? 'checked ' + ver.checked + ' entries · head ' + ver.head.slice(0, 16) + '…' : 'recomputing SHA-256 links'))), /*#__PURE__*/React.createElement(Button, {
+  }, ver ? ver.simulated ? 'entry ' + ver.tampered + ' was altered in a throwaway copy · chain breaks at ' + ver.broken_at + ' · your real log is untouched' : 'checked ' + ver.checked + ' entries · head ' + ver.head.slice(0, 16) + '…' : 'recomputing SHA-256 links'))), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2 flex-wrap"
+  }, /*#__PURE__*/React.createElement(Button, {
+    variant: "ghost",
+    icon: "alert",
+    onClick: simTamper,
+    disabled: verifying,
+    title: "Alter one entry in a copy of the log and show that verification catches it. The real log is not changed."
+  }, "Simulate tampering"), /*#__PURE__*/React.createElement(Button, {
     variant: "ghost",
     icon: verifying ? 'refresh' : 'check',
     onClick: doVerify,
     disabled: verifying
-  }, verifying ? 'Verifying…' : 'Verify integrity')), /*#__PURE__*/React.createElement("p", {
+  }, verifying ? 'Verifying…' : 'Verify integrity'))), /*#__PURE__*/React.createElement("p", {
     className: "text-[12px] text-rb-dim mt-3 leading-relaxed"
   }, "Each entry stores the hash of the previous entry and its own SHA-256 hash, computed over the previous hash plus a canonical serialization of the entry. If any field in any row were altered, verification would fail at that row and every row after it.")), /*#__PURE__*/React.createElement(Card, {
     className: "p-4"

@@ -43,6 +43,18 @@ Then open http://localhost:8000.
 Pushing to `main` deploys to GitHub Pages through `.github/workflows/pages.yml`.
 Enable it once under Settings → Pages → Source: GitHub Actions.
 
+## Demo highlights
+
+- **Guided demo:** the "Run the 2-minute guided demo" button on the sign-in page signs in as Red, runs attacks
+  until it has a blocked, a flagged and a missed result, switches to Blue and lands on the audit log.
+- **Simulate tampering:** on the Audit Log, alters one entry in a throwaway copy and shows the hash chain
+  catching it. The real log is never changed.
+- **Create suggested rule:** open a MISSED run as Blue and add the recommended blocking rule in one click, then
+  re-run the test as Red to see it caught.
+- **Report:** Blue and Admin can download a CSV summary of the programme and every run from the dashboard.
+- **Rate limiting:** the API allows 30 test runs per user per minute (`RUN_LIMIT_PER_MIN`), returns 429 beyond that
+  and records `RATE_LIMITED` in the audit log.
+
 ## Real backend (`server/`)
 
 A zero-dependency Python 3.9+ API (standard library only) with persistent storage.
@@ -87,6 +99,12 @@ The main site (`index.html`) detects a backend at startup:
   in-browser simulation runs unchanged, with seeded data that resets on reload.
 
 `live.html` is a smaller console for exercising the API directly.
+
+## Ideas still open
+
+- Call a real LLM as the target model (needs your own API key, kept in a server environment variable).
+- Use a hosted Postgres or a Render disk so data survives restarts.
+- Keep the free Render service awake with an uptime pinger on `/api/health` before a demo.
 
 ## Known limits
 

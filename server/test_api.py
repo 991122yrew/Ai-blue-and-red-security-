@@ -229,6 +229,28 @@ class ApiTest(unittest.TestCase):
         actions = self.audit_actions(admin)
         self.assertTrue({"SESSION_LOCKED", "ROLE_CHANGED", "USER_STATUS"} <= set(actions))
 
+    def test_run_rate_limit(self):
+        red, blue = self.login("red"), self.login("blue")
+        old, app.RUN_LIMIT_PER_MIN = app.RUN_LIMIT_PER_MIN, 4
+        try:
+            codes = [self.call("POST", "/api/runs", {"test_id": "T-PI-001"}, token=red)[0] for _ in range(6)]
+        finally:
+            app.RUN_LIMIT_PER_MIN = old
+        self.assertEqual(codes, [201, 201, 201, 201, 429, 429])
+        self.assertIn("RATE_LIMITED", self.audit_actions(blue))
+
+    def test_simulated_tamper_never_modifies_the_log(self):
+        red, blue = self.login("red"), self.login("blue")
+        self.call("POST", "/api/runs", {"test_id": "T-PI-001"}, token=red)
+        sim = self.call("GET", "/api/audit/verify?simulate_tamper=auto", token=blue)[1]
+        self.assertFalse(sim["valid"])
+        self.assertTrue(sim["simulated"])
+        self.assertEqual(sim["broken_at"], sim["tampered"])
+        real = self.call("GET", "/api/audit/verify", token=blue)[1]
+        self.assertTrue(real["valid"])
+        self.assertEqual(self.call("GET", "/api/audit/verify?simulate_tamper=EVT-9999", token=blue)[0], 404)
+        self.assertEqual(self.call("GET", "/api/audit/verify?simulate_tamper=auto", token=red)[0], 403)
+
     def test_csv_formula_injection_neutralised(self):
         self.assertEqual(app.csv_safe("=1+1"), "'=1+1")
         self.assertEqual(app.csv_safe("ok"), "ok")
@@ -245,6 +267,8 @@ class ApiTest(unittest.TestCase):
     def test_serves_front_end(self):
         with urllib.request.urlopen(self.base + "/") as r:
             self.assertIn(b"RedBlue Sentinel", r.read(4000))
+        with urllib.request.urlopen(self.base + "/config.js") as r:
+            self.assertTrue(r.headers["Content-Type"].startswith("application/javascript"))
 
 
 if __name__ == "__main__":
