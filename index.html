@@ -3872,7 +3872,7 @@ function Topbar({
     name: copied ? 'check' : 'copy',
     size: 12,
     className: copied ? 'text-rb-ok' : 'text-rb-dim'
-  })), /*#__PURE__*/React.createElement(SandboxPill, null)), /*#__PURE__*/React.createElement("div", {
+  })), /*#__PURE__*/React.createElement(SandboxPill, null), /*#__PURE__*/React.createElement(SessionTimer, null)), /*#__PURE__*/React.createElement("div", {
     className: "flex items-center gap-2 relative"
   }, /*#__PURE__*/React.createElement(RoleBadge, {
     role: user.role
@@ -4552,6 +4552,36 @@ function RuleModal({
     commit();
     onClose();
   }
+  const tester = (() => {
+    const pattern = String(f.pattern || '');
+    if (!pattern) return null;
+    if (f.pattern_type !== 'keyword') {
+      try {
+        new RegExp(pattern, 'i');
+      } catch (e) {
+        return {
+          invalid: e.message
+        };
+      }
+    }
+    const candidate = {
+      enabled: true,
+      pattern_type: f.pattern_type,
+      pattern
+    };
+    const others = db.rules.filter(r => r.enabled && (!rule || r.id !== rule.id));
+    const rows = db.tests.map(t => ({
+      test: t,
+      hit: ruleHit(t.prompt_text, candidate),
+      covered: others.some(r => ruleHit(t.prompt_text, r))
+    }));
+    const hits = rows.filter(r => r.hit);
+    return {
+      total: rows.length,
+      hits,
+      fresh: hits.filter(r => !r.covered)
+    };
+  })();
   const selectCls = "w-full bg-rb-base border border-rb-line rounded-lg px-3 py-2.5 text-[13.5px] focus:border-rb-blue/60";
   return /*#__PURE__*/React.createElement(Modal, {
     open: open,
@@ -4610,7 +4640,25 @@ function RuleModal({
     onChange: e => set('pattern', e.target.value),
     placeholder: "ignore  \xB7  (act as|role-?play)  \xB7  CANARY-7731",
     className: "w-full bg-rb-base border border-rb-line rounded-lg px-3 py-2.5 text-[13.5px] mono focus:border-rb-blue/60"
-  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+  })), tester ? /*#__PURE__*/React.createElement("div", {
+    className: "rounded-lg border border-rb-line bg-rb-raised px-3 py-2.5 text-[12.5px]",
+    "aria-live": "polite"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] uppercase tracking-[.08em] text-rb-dim font-medium mb-1.5"
+  }, "Rule sandbox — live test against the library"), tester.invalid ? /*#__PURE__*/React.createElement("div", {
+    className: "text-rb-red"
+  }, "Invalid pattern: " + tester.invalid) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", null, "Matches ", /*#__PURE__*/React.createElement("b", null, tester.hits.length + ' of ' + tester.total), " test cases", tester.fresh.length ? /*#__PURE__*/React.createElement("span", {
+    className: "text-rb-ok"
+  }, " \xB7 newly catches " + tester.fresh.length + ' no other enabled rule covers') : null), tester.hits.length ? /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap gap-1.5 mt-2"
+  }, tester.hits.map(h => /*#__PURE__*/React.createElement(Chip, {
+    key: h.test.id,
+    tone: h.covered ? 'muted' : 'ok'
+  }, h.test.id))) : /*#__PURE__*/React.createElement("div", {
+    className: "text-rb-dim mt-1"
+  }, "No test case matches yet — this rule would not change any result."), tester.hits.length ? /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] text-rb-dim mt-2"
+  }, "Green chips are cases only this rule would catch; grey ones are already covered.") : null)) : null, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
     className: "block text-[12px] uppercase tracking-[.08em] text-rb-dim font-medium mb-1.5"
   }, "Analyst note"), /*#__PURE__*/React.createElement("textarea", {
     value: f.note,
@@ -5067,6 +5115,58 @@ function BluePanel() {
     onClose: () => setModal(null)
   }));
 }
+function LiveFeed({
+  db,
+  runs,
+  own
+}) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => tick(x => x + 1), 5000);
+    return () => clearInterval(t);
+  }, []);
+  const items = runs.slice(-8).reverse();
+  return /*#__PURE__*/React.createElement(Card, {
+    className: "p-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between gap-2 mb-3"
+  }, /*#__PURE__*/React.createElement("h3", {
+    className: "font-display font-semibold text-[14px] flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "activity",
+    size: 15,
+    className: "text-rb-blue"
+  }), "Live activity"), /*#__PURE__*/React.createElement(LivePill, {
+    label: own ? 'Your runs' : 'Attacks as they land'
+  })), items.length ? /*#__PURE__*/React.createElement("ul", {
+    className: "divide-y divide-rb-line",
+    "aria-live": "polite"
+  }, items.map(r => {
+    const t = db.tests.filter(x => x.id === r.test_id)[0];
+    return /*#__PURE__*/React.createElement("li", {
+      key: r.id,
+      className: "flex items-center gap-3 py-2 fade-up"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "shrink-0 w-[78px]"
+    }, /*#__PURE__*/React.createElement(ResultChip, {
+      result: r.decision
+    })), /*#__PURE__*/React.createElement("span", {
+      className: "min-w-0 flex-1 truncate text-[12.5px]"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "mono text-[11px] text-rb-dim mr-2"
+    }, r.test_id), t ? t.title : r.category), own ? null : /*#__PURE__*/React.createElement("span", {
+      className: "hidden md:block mono text-[11px] text-rb-dim truncate max-w-[140px]"
+    }, r.user_email), /*#__PURE__*/React.createElement("span", {
+      className: "hidden sm:block text-[11.5px] text-rb-dim"
+    }, r.risk_label + ' risk'), /*#__PURE__*/React.createElement("span", {
+      className: "shrink-0 mono text-[11px] text-rb-dim w-[58px] text-right"
+    }, ago(r.ts)));
+  })) : /*#__PURE__*/React.createElement(EmptyState, {
+    icon: "activity",
+    title: "No activity yet",
+    desc: "Runs appear here as soon as a Red Team user fires an attack."
+  }));
+}
 function Dashboard() {
   const {
     db
@@ -5151,7 +5251,11 @@ function Dashboard() {
     icon: "activity",
     tone: "blue",
     sub: "(blocked + flagged) \xF7 total"
-  })), /*#__PURE__*/React.createElement("div", {
+  })), /*#__PURE__*/React.createElement(LiveFeed, {
+    db: db,
+    runs: own ? db.runs.filter(r => r.user_id === user.id) : db.runs,
+    own: own
+  }), /*#__PURE__*/React.createElement("div", {
     className: "grid xl:grid-cols-3 gap-4"
   }, /*#__PURE__*/React.createElement("div", {
     className: "xl:col-span-2"
@@ -5336,7 +5440,7 @@ function AuditLog() {
   }, [db.audit.length]);
   useEffect(() => {
     if (API.mode) refreshApi(db, commit).catch(() => {});
-    verifyChain(db).then(setVer);
+    verifyChain(db).then(setVer).catch(() => {});
   }, []);
   const rows = db.audit.filter(e => {
     if (fRole !== 'all' && e.role !== fRole) return false;
@@ -6067,6 +6171,27 @@ function Admin() {
     icon: "eyeOff"
   }, "No localStorage")))));
 }
+/* Idle session timeout: any click or key press resets it. Set window.RB_SESSION_TTL_MIN in
+   config.js to change the minutes, or to 0 to switch the timeout off. */
+function sessionTtlMin(d) {
+  const o = window.RB_SESSION_TTL_MIN;
+  return typeof o === 'number' ? o : d && d.meta ? d.meta.sessionTtlMin : 10;
+}
+function SessionTimer() {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => tick(x => x + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const d = window.__RB_STORE__;
+  const ttl = sessionTtlMin(d);
+  if (!d || !d.session.user || !ttl) return null;
+  const left = Math.max(0, d.session.lastActive + ttl * 60000 - Date.now());
+  return /*#__PURE__*/React.createElement(Chip, {
+    tone: left <= 60000 ? 'warn' : 'muted',
+    icon: "clock"
+  }, 'Session ' + pad(Math.floor(left / 60000)) + ':' + pad(Math.floor(left % 60000 / 1000)));
+}
 function DBProvider({
   children
 }) {
@@ -6090,7 +6215,7 @@ function DBProvider({
     const t = setInterval(() => {
       const d = window.__RB_STORE__;
       if (API.mode && API.token && d && d.session.user) hydrate(d).then(force).catch(() => {});
-    }, 10000);
+    }, 5000);
     return () => clearInterval(t);
   }, []);
   const login = useCallback(async (email, pw) => {
@@ -6110,6 +6235,7 @@ function DBProvider({
         d.session.sessionId = 'sess_' + Math.random().toString(16).slice(2, 6);
         d.session.startedAt = iso(Date.now());
         d.session.expiresAt = iso(Date.now() + d.meta.sessionTtlMin * 60000);
+        d.session.lastActive = Date.now();
         await hydrate(d);
         commit();
         return {
@@ -6129,6 +6255,7 @@ function DBProvider({
       d.session.sessionId = 'sess_' + Math.random().toString(16).slice(2, 6);
       d.session.startedAt = iso(Date.now());
       d.session.expiresAt = iso(Date.now() + d.meta.sessionTtlMin * 60000);
+      d.session.lastActive = Date.now();
       await appendAudit(d, {
         actor_id: u.email,
         role: u.role,
@@ -6170,6 +6297,38 @@ function DBProvider({
     d.session.startedAt = null;
     commit();
   }, [commit]);
+  useEffect(() => {
+    let warned = false;
+    const bump = () => {
+      const d = window.__RB_STORE__;
+      if (!d || !d.session.user) return;
+      const ttl = sessionTtlMin(d);
+      if (ttl && Date.now() > d.session.lastActive + ttl * 60000) return;
+      d.session.lastActive = Date.now();
+      warned = false;
+    };
+    ['pointerdown', 'keydown'].forEach(ev => window.addEventListener(ev, bump, true));
+    const t = setInterval(() => {
+      const d = window.__RB_STORE__;
+      if (!d || !d.session.user) return;
+      const ttl = sessionTtlMin(d);
+      if (!ttl) return;
+      const left = d.session.lastActive + ttl * 60000 - Date.now();
+      if (left <= 0) {
+        warned = false;
+        toast('Session expired after ' + ttl + ' idle minutes — please sign in again', 'warn');
+        logout();
+        go('/login');
+      } else if (left <= 60000 && !warned) {
+        warned = true;
+        toast('Your session expires in under a minute — click anywhere to stay signed in', 'warn');
+      }
+    }, 1000);
+    return () => {
+      ['pointerdown', 'keydown'].forEach(ev => window.removeEventListener(ev, bump, true));
+      clearInterval(t);
+    };
+  }, [logout]);
   const value = useMemo(() => ({
     db,
     commit,

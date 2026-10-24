@@ -52,6 +52,12 @@ Enable it once under Settings → Pages → Source: GitHub Actions.
 - **Create suggested rule:** open a MISSED run as Blue and add the recommended blocking rule in one click, then
   re-run the test as Red to see it caught.
 - **Report:** Blue and Admin can download a CSV summary of the programme and every run from the dashboard.
+- **Rule sandbox:** while creating or editing a rule, Blue sees live which of the 15 test cases it would match
+  and which ones only this rule would newly catch, plus a check for invalid regexes.
+- **Live activity feed:** the dashboard lists attacks as they land (refreshes every 5 s in Live API mode).
+- **Idle session timeout:** 10 minutes without a click or key press signs you out, with a countdown chip and a
+  warning in the last minute. Change it with `window.RB_SESSION_TTL_MIN` in `config.js` (0 turns it off).
+  This is enforced in the browser; the API token itself expires after `TOKEN_TTL_MIN` (default 60).
 - **Rate limiting:** the API allows 30 test runs per user per minute (`RUN_LIMIT_PER_MIN`), returns 429 beyond that
   and records `RATE_LIMITED` in the audit log.
 
