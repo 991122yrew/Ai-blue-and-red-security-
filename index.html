@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>RedBlue Sentinel — Secure Adversarial Testing for AI Systems</title>
-<meta name="description" content="RedBlue Sentinel: a secure sandbox for adversarial AI safety testing with role separation, risk scoring, an append-only hash-chained audit trail and anomaly detection. Hack N Hills 2026 prototype." />
+<meta name="description" content="RedBlue Sentinel: a secure sandbox for adversarial AI safety testing with role separation, risk scoring, an append-only hash-chained audit trail and anomaly detection. Hack in Hills 26 prototype." />
 <meta name="theme-color" content="#0A0D14" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230A0D14'/%3E%3Cpath d='M16 5l9 4v7c0 5-4 9-9 11-5-2-9-6-9-11V9z' fill='none' stroke='%237C5CFF' stroke-width='2'/%3E%3Cpath d='M16 5v22c-5-2-9-6-9-11V9z' fill='%23FF3B4E' opacity='.7'/%3E%3Cpath d='M16 5v22c5-2 9-6 9-11V9z' fill='%232F8CFF' opacity='.7'/%3E%3C/svg%3E" />
 <meta property="og:title" content="RedBlue Sentinel" />
@@ -421,9 +421,9 @@ const {
 const SITE = {
   name: 'RedBlue Sentinel',
   tagline: 'Secure adversarial testing for AI systems',
-  team: 'Team Sentinel',
-  event: 'Hack N Hills 2026',
-  school: 'Galgotias University, Manali',
+  team: 'Team Vurve',
+  event: 'Hack in Hills ’26',
+  school: '',
   github: 'https://github.com/991122yrew/Ai-blue-and-red-security-'
 };
 const C = {
@@ -1111,8 +1111,17 @@ function riskScore(test, decision) {
     label: score >= 6 ? 'High' : score >= 4 ? 'Medium' : 'Low'
   };
 }
+/* A blocking keyword that really appears in the attack prompt, so the suggested rule catches it on re-run.
+   Uses the library's hint when it is part of the prompt, otherwise the longest word in the prompt. */
+function pickPhrase(test) {
+  const prompt = String(test.prompt_text || '');
+  const hint = String(test.suggest || '');
+  if (!prompt || hint && prompt.toLowerCase().indexOf(hint.toLowerCase()) !== -1) return hint;
+  const words = prompt.match(/[A-Za-z][A-Za-z-]{5,}/g) || [];
+  return words.length ? words.reduce((best, w) => w.length > best.length ? w : best, '').toLowerCase() : hint;
+}
 function recommend(test, decision) {
-  if (decision === 'MISSED') return 'No rule covered this pattern. Suggested new rule: keyword “' + test.suggest + '” with action BLOCK, then re-run ' + test.id + ' to confirm.';
+  if (decision === 'MISSED') return 'No rule covered this pattern. Suggested new rule: keyword “' + pickPhrase(test) + '” with action BLOCK, then re-run ' + test.id + ' to confirm.';
   if (decision === 'FLAGGED') return 'Reviewer load can be reduced by promoting the matched pattern to BLOCK once false positives are measured.';
   return 'Handled by the input boundary. No action required.';
 }
@@ -2928,7 +2937,7 @@ function PublicFooter() {
     className: "border-t border-rb-line"
   }, /*#__PURE__*/React.createElement("div", {
     className: "max-w-[1280px] mx-auto px-4 py-5 flex flex-col sm:flex-row items-center justify-between gap-2 text-[12.5px] text-rb-dim"
-  }, /*#__PURE__*/React.createElement("span", null, SITE.team + ' · ' + SITE.event + ' · ' + SITE.school), /*#__PURE__*/React.createElement("span", {
+  }, /*#__PURE__*/React.createElement("span", null, SITE.team + ' · ' + SITE.event + ' · Problem Statement 04: Bayora'), /*#__PURE__*/React.createElement("span", {
     className: "mono"
   }, "[ encrypted \xB7 isolated \xB7 audit-logged ]"))));
 }
@@ -3032,7 +3041,7 @@ function Landing() {
   }, /*#__PURE__*/React.createElement(Chip, {
     tone: "glow",
     icon: "bolt"
-  }, "Hack N Hills 2026 \xB7 Prototype"), /*#__PURE__*/React.createElement(Chip, {
+  }, "Hack in Hills ’26 \xB7 Prototype"), /*#__PURE__*/React.createElement(Chip, {
     tone: "ok",
     icon: "server",
     dot: "pulse"
@@ -3577,7 +3586,7 @@ function DocPage({
     className: "text-[12.5px] text-rb-dim leading-relaxed"
   }, /*#__PURE__*/React.createElement("div", {
     className: "font-semibold text-rb-ink mb-1"
-  }, "Questions about this document"), "Reach the team through the repository issue tracker linked in the footer. This prototype was built for ", SITE.event, " at ", SITE.school, " and is not a commercial service."))))), /*#__PURE__*/React.createElement(PublicFooter, null));
+  }, "Questions about this document"), "Reach the team through the repository issue tracker linked in the footer. This prototype was built by ", SITE.team, " for ", SITE.event, " and is not a commercial service."))))), /*#__PURE__*/React.createElement(PublicFooter, null));
 }
 function Terms() {
   return /*#__PURE__*/React.createElement(DocPage, {
@@ -4778,7 +4787,7 @@ function BluePanel() {
     toast('Rule ' + r.id + ' ' + (r.enabled ? 'enabled' : 'disabled'), r.enabled ? 'ok' : 'info');
   }
   async function suggestRule(run, test) {
-    const phrase = test.suggest;
+    const phrase = pickPhrase(test);
     if (db.rules.some(r => String(r.pattern).toLowerCase() === String(phrase).toLowerCase())) {
       toast('A rule for “' + phrase + '” already exists — re-run ' + test.id + ' to confirm', 'info');
       return;
